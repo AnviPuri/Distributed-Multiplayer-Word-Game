@@ -1,6 +1,7 @@
+import json
 import socket
 import struct
-import threading
+
 
 # Listens to multicast message
 # establishes unicast connection with primary server
@@ -31,72 +32,69 @@ def create_multicast_client_socket(multicast_group, port):
 
     return sock
 
+
 class Client:
-    def __init__(self, multicast_group='224.3.29.71', multicast_port=10000, server_ip='127.0.0.1', server_port=4000):
+    def __init__(self, multicast_group='224.3.29.71', multicast_port=10000):
         """Initialize the Client class with multicast and unicast settings."""
         self.multicast_group = multicast_group
         self.multicast_port = multicast_port
-        self.server_ip = server_ip
-        self.server_port = server_port
         self.running = False
         self.multicast_thread = None
         self.sock = None  # Socket will be initialized when we start listening
         self.running = False  # Flag to control the listening loop
+        self.server_port = None
+        self.server_ip = None
+
+    def set_primary_server_details(self, server_ip, server_port):
+        self.server_ip = server_ip
+        self.server_port = server_port
 
     def start(self):
         """Start the multicast listener and connect to the primary server."""
+        self.receive_server_details()
+        if self.server_ip and self.server_port:
+            self.start_unicast_client()
+        else:
+            print("Failed to retrieve server details. Cannot proceed with unicast connection.")
 
-        # Start the unicast client in a separate thread
-        unicast_thread = threading.Thread(target=self.start_unicast_client)
-        unicast_thread.daemon = True
-        unicast_thread.start()
+    def receive_server_details(self):
+        """Run the multicast client and continuously listen for server details."""
+        print(f"Listening for multicast on {self.multicast_group}:{self.multicast_port}")
+        self.sock = create_multicast_client_socket(self.multicast_group, self.multicast_port)
 
-        # Start multicast if primary server
-        self.running = True
-        self.run_client()
+        while not self.server_ip or not self.server_port:
+            try:
+                # Continuously receive multicast messages until valid server details are obtained
+                data, address = self.sock.recvfrom(1024)
+                message = data.decode()
 
-
-    def run_client(self, multicast_group='224.3.29.71', port=10000):
-        """
-        Run the multicast client and listen for messages
-
-        Parameters:
-            multicast_group (str): The multicast group IP address to join
-            port (int): The port number to listen on
-        """
-        # Initialize and store the socket as an instance variable
-        self.sock = create_multicast_client_socket(multicast_group, port)
-        self.running = True
-
-        print(f'Starting multicast client listening on group {multicast_group}:{port}')
-        print('Press Ctrl+C to stop listening')
-
-        try:
-            while self.running:
                 try:
-                    # Set a timeout so we can check the running flag periodically
-                    self.sock.settimeout(1.0)
-                    # Buffer size of 1024 bytes should be sufficient for most messages
-                    data, address = self.sock.recvfrom(1024)
-                    print(f'Received message from {address}: {data.decode()}')
-                except socket.timeout:
-                    # No message received within timeout period - this is normal
-                    continue
-                except socket.error as e:
-                    print(f'Network error occurred: {e}')
-                    self.running = False
+                    server_data = json.loads(message)
+                    print(f"Received server data from {address}: {server_data}")
+                    server_ip = server_data.get("ip")
+                    server_port = server_data.get("port")
 
-        except KeyboardInterrupt:
-            print('\nReceived stop signal')
-        finally:
-            self.stop_client()
+                    if server_ip and server_port:
+                        self.set_primary_server_details(server_ip, server_port)
+                        print(f"Primary server details set: IP={server_ip}, Port={server_port}")
+                    else:
+                        print("Invalid server data received. Missing IP or port.")
+                except json.JSONDecodeError:
+                    print(f"Received invalid JSON message from {address}: {message}")
+
+            except socket.error as e:
+                print(f"Error receiving multicast message: {e}")
+
+        if self.sock:
+            self.sock.close()
+            self.sock = None
+        print("Stopped multicast listener.")
 
     def stop_client(self):
         """
-        Gracefully stop the client and clean up resources
+        Stop the client and clean up resources
         """
         self.running = False
-        # self.stop_event.set()
 
         if self.sock:
             print('Closing socket...')
@@ -108,8 +106,6 @@ class Client:
             self.client_thread.join()
 
         print('Client stopped')
-
-
 
     def start_unicast_client(self):
         """Establish a unicast connection to the server."""
@@ -127,16 +123,13 @@ class Client:
     def stop(self):
         """Stop the client."""
         print("Stopping client...")
-        self.running = False
-        # if self.multicast_impl:
-        #     self.multicast_impl.stop_recieving()
-        if self.multicast_thread and self.multicast_thread.is_alive():
-            self.multicast_thread.join()
+        if self.sock:
+            self.sock.close()
         print("Client stopped.")
 
 
 if __name__ == '__main__':
-    client = Client('224.3.29.71', 10000, '127.0.0.1', 4000)
+    client = Client('224.3.29.71', 10000)
     try:
         client.start()
     except KeyboardInterrupt:
