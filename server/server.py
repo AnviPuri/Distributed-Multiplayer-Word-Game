@@ -28,7 +28,6 @@ def create_multicast_socket(multicast_group, port):
 class Server:
     def __init__(self, server_ip, server_port, is_primary_server):
         """Initializing the Server class"""
-        self.running = False
         self.server_ip = server_ip
         self.server_port = server_port
         self.is_primary_server = is_primary_server
@@ -43,7 +42,7 @@ class Server:
     def start(self):
         """Starting both unicast server and multicast sending if primary"""
         # Starting the unicast server in a separate thread
-        self.running = True
+        self.server_running = True
         unicast_thread = threading.Thread(target=self.start_server)
         unicast_thread.daemon = True
         unicast_thread.start()
@@ -102,6 +101,7 @@ class Server:
                 client_thread.daemon = True
                 client_thread.start()
             except socket.timeout:
+                print("Socket Timeout")
                 continue  # Continue to check the `server_running` flag
             except Exception as e:
                 print(f"Error: {e}")
