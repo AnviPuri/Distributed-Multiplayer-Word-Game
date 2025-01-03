@@ -34,16 +34,17 @@ def create_multicast_client_socket(multicast_group, port):
 
 
 class Client:
-    def __init__(self, multicast_group='224.3.29.71', multicast_port=10000):
+    def __init__(self, multicast_group='224.3.29.71', multicast_port=10000, client_ip='127.0.0.2', client_port=5001):
         """Initialize the Client class with multicast and unicast settings."""
         self.multicast_group = multicast_group
         self.multicast_port = multicast_port
-        self.running = False
         self.multicast_thread = None
         self.sock = None  # Socket will be initialized when we start listening
         self.running = False  # Flag to control the listening loop
         self.server_port = None
         self.server_ip = None
+        self.client_ip = client_ip
+        self.client_port = client_port
 
     def set_primary_server_details(self, server_ip, server_port):
         self.server_ip = server_ip
@@ -112,9 +113,11 @@ class Client:
         try:
             print(f"Connecting to server {self.server_ip}:{self.server_port}")
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-                # client_socket.bind((self.server_ip, self.server_port))  # Use a different IP and port for the client
+                client_socket.bind((self.client_ip, self.client_port))
                 client_socket.connect((self.server_ip, self.server_port))
-                client_socket.sendall(b"Hello from client")
+
+                client_details = json.dumps({"client_ip": self.client_ip, "client_port": self.client_port})
+                client_socket.sendall(client_details.encode())
                 response = client_socket.recv(1024)
                 print(f"Unicast response from server: {response.decode()}")
         except socket.error as e:
@@ -129,7 +132,7 @@ class Client:
 
 
 if __name__ == '__main__':
-    client = Client('224.3.29.71', 10000)
+    client = Client('224.3.29.71', 10000, '127.0.0.2', 5001)
     try:
         client.start()
     except KeyboardInterrupt:

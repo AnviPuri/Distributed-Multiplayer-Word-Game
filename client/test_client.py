@@ -1,7 +1,7 @@
 import socket
 
 def start_client():
-    # Client binds to 127.0.0.2 and connects to the server on 127.0.0.1:5001
+    # Client binds to 127.0.0.2 and 5001 and connects to the server on 127.0.0.1:5001
     client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket.bind(('127.0.0.2', 4000))  # Use a different IP and port for the client
     client_socket.connect(('127.0.0.1', 4000))
