@@ -19,7 +19,6 @@ def create_multicast_client_socket(multicast_group, port):
     # where multiple clients need to listen on the same address/port combination
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
-    print(f'mg:{multicast_group},port:{port}')
     # Bind to all interfaces on the specified port
     sock.bind(('', port))
 
@@ -74,8 +73,9 @@ class Client:
                     print(f"Received server data from {address}: {server_data}")
                     server_ip = server_data.get("ip")
                     server_port = server_data.get("port")
+                    server_type = server_data.get("type")
 
-                    if server_ip and server_port:
+                    if server_type == "Primary" and server_ip and server_port:
                         self.set_primary_server_details(server_ip, server_port)
                         print(f"Primary server details set: IP={server_ip}, Port={server_port}")
                     else:
