@@ -73,7 +73,7 @@ class Client:
                     print(f"Received server data from {address}: {server_data}")
                     server_ip = server_data.get("ip")
                     server_port = server_data.get("port")
-                    server_type = server_data.get("type")
+                    server_type = server_data.get("server_type")
 
                     if server_type == "Primary" and server_ip and server_port:
                         self.set_primary_server_details(server_ip, server_port)
@@ -116,7 +116,7 @@ class Client:
                 client_socket.bind((self.client_ip, self.client_port))
                 client_socket.connect((self.server_ip, self.server_port))
 
-                client_details = json.dumps({"client_ip": self.client_ip, "client_port": self.client_port})
+                client_details = json.dumps({"client_ip": self.client_ip, "client_port": self.client_port, "message_type": "CLIENT_CONNECTION_TO_SERVER"})
                 client_socket.sendall(client_details.encode())
                 response = client_socket.recv(1024)
                 print(f"Unicast response from server: {response.decode()}")
