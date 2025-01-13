@@ -69,7 +69,7 @@ class Server:
         self.last_heartbeat = {}
         self.heartbeat_interval = 10  # seconds
         self.heartbeat_timeout = 30  # seconds
-        heartbeat_failed_flag = False  # Global flag to indicate heartbeat failure
+        self.heartbeat_failed_flag = False  # Global flag to indicate heartbeat failure
         self.is_acknowledged_by_primary_server = False
         if self.is_primary_server is True:
             self.server_id = 1
@@ -212,19 +212,20 @@ class Server:
     def leader_election(self, server_id):
         """
     hithesh your work
-    
+
     """
-    global heartbeat_failed_flag
 
 
-    if heartbeat_failed_flag:
-        if server_id:
-            print(f"Leader election triggered due to failure of server {server_id}.")
-        else:
+        if self.heartbeat_failed_flag:
+            
+
+            if server_id:
+                print(f"Leader election triggered due to failure of server {server_id}.")
+            else:
+                print("Starting normal leader election process.")
+            self.heartbeat_failed_flag = False  # Reset the flag after initiating the leader election
+
             print("Starting normal leader election process.")
-        heartbeat_failed_flag = False  # Reset the flag after initiating the leader election
-
-        print("Starting normal leader election process.")
 
 
 
