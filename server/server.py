@@ -168,7 +168,6 @@ class Server:
         If the unresponsive server is the primary, a leader election is triggered.
         Otherwise, the failure is handled for backup servers.
         """
-        global heartbeat_failed_flag
     
         while self.server_running:
             now = datetime.datetime.now()
@@ -177,7 +176,7 @@ class Server:
                 if last_heartbeat and (now - last_heartbeat).total_seconds() > self.heartbeat_timeout:
                     print(f"Server {server.id} at {server.ip}:{server.port} is unresponsive!")
                     self.connected_servers.remove(server)
-                    heartbeat_failed_flag = True
+                    self.heartbeat_failed_flag = True
                     if server.is_primary:
                       
                         self.leader_election(server.id)
@@ -196,7 +195,6 @@ class Server:
     Prints messages to log the server's failure and which action is taken.
     Resets the heartbeat failure flag after handling the failure.
      """
-        global heartbeat_failed_flag
         print(f"Handling heartbeat failure for server {server.server_id} at {server.ip}:{server.port}.")
 
         if server.is_primary:
@@ -206,7 +204,7 @@ class Server:
             print(f"Backup server {server.id} failure detected. Removing from connected servers list.")
         
         # Reset the heartbeat failure flag
-        heartbeat_failed_flag = False
+        self.heartbeat_failed_flag = False
 
 
     def leader_election(self, server_id):
