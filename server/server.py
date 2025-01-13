@@ -8,7 +8,6 @@ import time
 from server_details import ServerDetail
 
 
-
 # Primary server -
 # 1. start multicast thread for sending its own information
 # 2. keep on listening multicast thread for other servers
@@ -98,7 +97,7 @@ class Server:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.bind((self.server_ip, self.server_port))
             self.server_socket.listen(5)
-            print(f"Server running on {self.server_ip}:{self.server_port} for receiving messages")
+            print(f"Server listening on {self.server_ip}:{self.server_port} for receiving messages")
 
             while self.server_running:
                 try:
@@ -195,18 +194,20 @@ class Server:
     def send_multicast_for_backup(self):
         """Backup server sends multicast messages for 5 minutes"""
         sock = create_multicast_sender_socket()
-        is_acknowledged_by_primary_server = "N"
-        if self.server_id is not None:
-            is_acknowledged_by_primary_server = "Y"
-
-        server_data = {"ip": self.server_ip, "port": self.server_port, "server_type": "Backup",
-                       "is_acknowledged_by_primary_server": is_acknowledged_by_primary_server}
-        server_data_message = json.dumps(server_data)
         start_time = time.time()
 
         try:
             while self.server_running and (time.time() - start_time < 300):
                 try:
+                    is_acknowledged_by_primary_server = "N"
+                    if self.server_id is not None:
+                        is_acknowledged_by_primary_server = "Y"
+
+                    server_data = {"ip": self.server_ip, "port": self.server_port, "server_type": "Backup",
+                                   "is_acknowledged_by_primary_server": is_acknowledged_by_primary_server,
+                                   "id": self.server_id}
+                    server_data_message = json.dumps(server_data)
+
                     print("Sending multicast message...")
                     sock.sendto(server_data_message.encode(), (self.multicast_group, self.multicast_port))
                     print(f"Backup server sent multicast message: {server_data_message}")
@@ -227,51 +228,55 @@ class Server:
         """
         sock = create_multicast_receiver_socket(self.multicast_group, self.multicast_port)
         print(f"Listening for multicast messages on {self.multicast_group}:{self.multicast_port}")
-
         while self.server_running:
             try:
                 data, addr = sock.recvfrom(1024)
                 message = json.loads(data.decode())
-                print(f"Received multicast message from {addr}: {message}")
+                server_ip = message.get("ip")
+                server_port = message.get("port")
 
-                # in case of a primary server - the primary server sends its own ip, port, server_id, message_type and new id of backup server
-                # it also saves the server details
-                # The backup server then on receiving the unicast message PRIMARY_CONNECTION_TO_BACKUP saves the details of primary server and also updates its own id
-                if message.get("server_type") == "Backup":
-                    if self.is_primary_server and message.get(
-                                "is_acknowledged_by_primary_server") == "N":
-                        new_server_id = self.id_counter + 1
-                        self.id_counter += 1
-                        response = json.dumps({
-                            "message_type": "PRIMARY_CONNECTION_TO_BACKUP",
-                            "server_id": self.server_id,
-                            "ip": self.server_ip,
-                            "port": self.server_port,
-                            "new_server_id": new_server_id
-                        })
-                        self.connect_to_backup_server(message["ip"], message["port"], response)
-                        new_server = ServerDetail(
-                            ip=message["ip"],
-                            port=message["port"],
-                            server_id=new_server_id,
-                            is_primary=False
-                        )
-                        self.connected_servers.append(new_server)
-                        print(f"Added to list of servers: {new_server.ip}:{new_server.port}")
-                    else:
-                        # in case of a backup server only establish unicast connection when "is_acknowledged_by_primary_server" is set to Y
-                        # backup servers send their details - ip, port, id and message_type and in turn receive the backup servers id which they then store
-                        # Also if the server itself does not have an id it does not try to contact any other server because it is assumed it is still in the process of getting an id
-                        # TO DO -- Establish unicast connection to backup server only when it is not present in the list of connected servers
-                        if self.server_id is not None and message.get(
-                                "is_acknowledged_by_primary_server") == "Y":
+                if server_ip != self.server_ip and server_port != self.server_port:
+                    print(f"Received multicast message from {addr}: {message}")
+
+                    # in case of a primary server - the primary server sends its own ip, port, server_id, message_type and new id of backup server
+                    # it also saves the server details
+                    # The backup server then on receiving the unicast message PRIMARY_CONNECTION_TO_BACKUP saves the details of primary server and also updates its own id
+                    if message.get("server_type") == "Backup":
+                        if self.is_primary_server and message.get(
+                                "is_acknowledged_by_primary_server") == "N" and not self.is_server_in_connected_list(
+                            server_ip, server_port):
+                            new_server_id = self.id_counter + 1
+                            self.id_counter += 1
                             response = json.dumps({
-                                "message_type": "BACKUP_CONNECTION_TO_BACKUP",
+                                "message_type": "PRIMARY_CONNECTION_TO_BACKUP",
                                 "server_id": self.server_id,
                                 "ip": self.server_ip,
                                 "port": self.server_port,
+                                "new_server_id": new_server_id
                             })
                             self.connect_to_backup_server(message["ip"], message["port"], response)
+                            new_server = ServerDetail(
+                                ip=message["ip"],
+                                port=message["port"],
+                                server_id=new_server_id,
+                                is_primary=False
+                            )
+                            self.connected_servers.append(new_server)
+                            print(f"Added to list of servers: {new_server.ip}:{new_server.port}")
+                        elif not self.is_primary_server and not self.is_server_in_connected_list(server_ip, server_port):
+                            # in case of a backup server only establish unicast connection when "is_acknowledged_by_primary_server" is set to Y
+                            # backup servers send their details - ip, port, id and message_type and in turn receive the backup servers id which they then store
+                            # Also if the server itself does not have an id it does not try to contact any other server because it is assumed it is still in the process of getting an id
+                            # TO DO -- Establish unicast connection to backup server only when it is not present in the list of connected servers
+                            if self.server_id is not None and message.get(
+                                    "is_acknowledged_by_primary_server") == "Y":
+                                response = json.dumps({
+                                    "message_type": "BACKUP_CONNECTION_TO_BACKUP",
+                                    "server_id": self.server_id,
+                                    "ip": self.server_ip,
+                                    "port": self.server_port,
+                                })
+                                self.connect_to_backup_server(message["ip"], message["port"], response)
             except Exception as e:
                 print(f"Error receiving multicast: {e}")
                 break
@@ -305,6 +310,19 @@ class Server:
                             print(f"New Backup server added to list of servers.")
         except Exception as e:
             print(f"Error connecting to backup server: {e}")
+
+    def is_server_in_connected_list(self, new_server_ip, new_server_port):
+        """
+        Check if a server with the given IP and port exists in the connected servers list.
+
+        :param ip: IP address of the server to search for.
+        :param port: Port number of the server to search for.
+        :return: True if a server with the given IP and port exists, otherwise False.
+        """
+        for server in self.connected_servers:
+            if server.ip == new_server_ip and server.port == new_server_port:
+                return True
+        return False
 
     def stop(self):
         """Stop the server and cleanup resources"""

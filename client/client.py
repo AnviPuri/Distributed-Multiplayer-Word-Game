@@ -18,6 +18,7 @@ def create_multicast_client_socket(multicast_group, port):
     # Allow multiple sockets to use the same port - this is crucial for multicast
     # where multiple clients need to listen on the same address/port combination
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 
     # Bind to all interfaces on the specified port
     sock.bind(('', port))
@@ -132,7 +133,7 @@ class Client:
 
 
 if __name__ == '__main__':
-    client = Client('224.3.29.71', 10000, '127.0.0.2', 5001)
+    client = Client('224.3.29.71', 10000, '127.0.0.2', 5005)
     try:
         client.start()
     except KeyboardInterrupt:
