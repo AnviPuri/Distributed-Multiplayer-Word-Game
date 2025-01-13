@@ -1,5 +1,4 @@
 import argparse
-import datetime
 import json
 import socket
 import struct
@@ -63,13 +62,8 @@ class Server:
         self.server_socket = None
         self.multicast_group = '224.3.29.71'
         self.multicast_port = 10000
-
         self.connected_servers = []
         self.connected_clients = []
-        self.last_heartbeat = {}
-        self.heartbeat_interval = 10  # seconds
-        self.heartbeat_timeout = 30  # seconds
-        heartbeat_failed_flag = False  # Global flag to indicate heartbeat failure
         self.is_acknowledged_by_primary_server = False
         if self.is_primary_server is True:
             self.server_id = 1
@@ -85,14 +79,9 @@ class Server:
 
         # Start multicast behavior based on server role
         if self.is_primary_server:
-            threading.Thread(target=self.send_heartbeat, daemon=True).start()
             threading.Thread(target=self.send_multicast_message, daemon=True).start()
         else:
-            threading.Thread(target=self.monitor_heartbeat, daemon=True).start()
             threading.Thread(target=self.send_multicast_for_backup, daemon=True).start()
-            
-
-
         threading.Thread(target=self.listen_multicast_messages, daemon=True).start()
 
         # Keep the main thread alive to allow background threads to continue running
@@ -102,40 +91,6 @@ class Server:
         except KeyboardInterrupt:
             print("Server shutting down...")
             self.stop()
-
-    def is_server_alive(server):
-        try:
-            with socket.create_connection((server.ip, server.port), timeout=2):
-                return True
-        except:
-            return False
-
-
-    def send_heartbeat(self):
-        """
-    Sends periodic heartbeat messages to all connected servers.
-    Each heartbeat contains the server's ID and a timestamp.
-    If a server is unresponsive, it is removed from the list of connected servers.
-    Heartbeats are sent at intervals defined by `self.heartbeat_interval`.
-    """
-        while self.server_running:
-            try:
-                for server in self.connected_servers:
-                    heartbeat_message = json.dumps({
-                        "message_type": "HEARTBEAT",
-                        "server_id": self.server_id,
-                        "timestamp": str(datetime.datetime.now())
-                    })
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                        sock.connect((server.ip, server.port))
-                        sock.sendall(heartbeat_message.encode())
-                    print(f"Sent heartbeat to {server.ip}:{server.port}")
-                time.sleep(self.heartbeat_interval)
-            except ConnectionRefusedError:
-                print(f"Error sending heartbeat to {server.id} at {server.ip}:{server.port}: Connection refused")
-                self.connected_servers.remove(server)  # Remove unresponsive server from the list
-        
-
 
     def start_unicast_server(self):
         """Start the unicast server to handle incoming connections."""
@@ -160,73 +115,6 @@ class Server:
             if self.server_socket:
                 self.server_socket.close()
             print("Unicast server has been stopped.")
-
-    def monitor_heartbeat(self):
-        """
-        Monitors heartbeat messages from connected servers to detect failures.
-        If a server is unresponsive, it is removed from the list, and a failure flag is set.
-        If the unresponsive server is the primary, a leader election is triggered.
-        Otherwise, the failure is handled for backup servers.
-        """
-        global heartbeat_failed_flag
-    
-        while self.server_running:
-            now = datetime.datetime.now()
-            for server in self.connected_servers:
-                last_heartbeat = self.last_heartbeat.get(server.id)
-                if last_heartbeat and (now - last_heartbeat).total_seconds() > self.heartbeat_timeout:
-                    print(f"Server {server.id} at {server.ip}:{server.port} is unresponsive!")
-                    self.connected_servers.remove(server)
-                    heartbeat_failed_flag = True
-                    if server.is_primary:
-                      
-                        self.leader_election(server.id)
-                    else:
-                        self.handle_heartbeat_failure(server)
-            time.sleep(self.heartbeat_interval)
-
-
-
-
-
-    def handle_heartbeat_failure(self, server):
-        """
-    Handles the actions when a heartbeat failure is detected for a server.
-    If the server is primary, initiates a leader election; if backup, removes it from the list.
-    Prints messages to log the server's failure and which action is taken.
-    Resets the heartbeat failure flag after handling the failure.
-     """
-        global heartbeat_failed_flag
-        print(f"Handling heartbeat failure for server {server.server_id} at {server.ip}:{server.port}.")
-
-        if server.is_primary:
-            print("Primary server failure detected. Initiating leader election...")
-            self.leader_election(server.id)  # Pass the server ID of the failed primary server
-        else:
-            print(f"Backup server {server.id} failure detected. Removing from connected servers list.")
-        
-        # Reset the heartbeat failure flag
-        heartbeat_failed_flag = False
-
-
-    def leader_election(self, server_id):
-        """
-    hithesh your work
-    
-    """
-    global heartbeat_failed_flag
-
-
-    if heartbeat_failed_flag:
-        if server_id:
-            print(f"Leader election triggered due to failure of server {server_id}.")
-        else:
-            print("Starting normal leader election process.")
-        heartbeat_failed_flag = False  # Reset the flag after initiating the leader election
-
-        print("Starting normal leader election process.")
-
-
 
     def handle_client(self, conn, addr):
         """Handle incoming unicast connection"""
@@ -255,10 +143,6 @@ class Server:
                         "server_id": self.server_id,
                     })
                     conn.sendall(response.encode())
-                    
-                elif message_type == "HEARTBEAT":
-                    print(f"Heartbeat received from {addr}: {message}")
-                    self.last_heartbeat[message["server_id"]] = datetime.datetime.now()
 
                 elif message_type == "PRIMARY_CONNECTION_TO_BACKUP":
                     print(f"Primary to Backup connection received from {addr}: {data.decode()}")
