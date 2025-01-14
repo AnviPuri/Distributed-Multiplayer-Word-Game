@@ -211,6 +211,16 @@ class Server:
         hithesh your work
         
         """
+        while self.server_running:
+            print("Connected Servers Information 123:")
+            for server in self.connected_servers:
+                print(f"Server ID: {server.id}, IP: {server.ip}, Port: {server.port}, "
+                      f"Is Primary: {server.is_primary}")
+            # if not self.connected_servers:
+            #     print("No servers are currently connected.")
+            # else:
+
+            time.sleep(30)  # Wait for 2 minutes before displaying again
 
 
         if self.heartbeat_failed_flag:
