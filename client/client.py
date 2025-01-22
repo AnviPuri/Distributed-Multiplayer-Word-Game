@@ -1,10 +1,9 @@
+import argparse
 import json
 import socket
 import struct
+import threading
 
-
-# Listens to multicast message
-# establishes unicast connection with primary server
 
 def create_multicast_client_socket(multicast_group, port):
     """
@@ -38,11 +37,13 @@ class Client:
         """Initialize the Client class with multicast and unicast settings."""
         self.multicast_group = multicast_group
         self.multicast_port = multicast_port
-        self.multicast_thread = None
+
         self.sock = None  # Socket will be initialized when we start listening
-        self.running = False  # Flag to control the listening loop
+        self.client_running = False
+
         self.server_port = None
         self.server_ip = None
+
         self.client_ip = client_ip
         self.client_port = client_port
 
@@ -51,22 +52,87 @@ class Client:
         self.server_port = server_port
 
     def start(self):
-        """Start the multicast listener and connect to the primary server."""
+        """Start the multicast listener, unicast server, and connect to the primary server."""
+        self.client_running = True
+        threading.Thread(target=self.start_unicast_client, daemon=True).start()
+
         self.receive_server_details()
+
         if self.server_ip and self.server_port:
-            self.start_unicast_client()
+            self.connect_to_server()
         else:
             print("Failed to retrieve server details. Cannot proceed with unicast connection.")
+
+    def start_unicast_client(self):
+        """Start the unicast client to handle incoming connections."""
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.bind((self.client_ip, self.client_port))
+            self.sock.listen(5)
+            print(f"Unicast client listening on {self.client_ip}:{self.client_port}")
+
+            while self.client_running:
+                try:
+                    conn, addr = self.sock.accept()
+                    print(f"Establishing Connection...")
+                    connection_thread = threading.Thread(target=self.handle_connection, args=(conn, addr))
+                    connection_thread.daemon = True
+                    connection_thread.start()
+                except Exception as e:
+                    print(f"Error during accept or connection handling: {e}")
+        except Exception as e:
+            print(f"Error starting unicast client: {e}")
+        finally:
+            if self.sock:
+                self.sock.close()
+            print("Unicast client has been stopped.")
+
+    def handle_connection(self, conn, addr):
+        """Handle incoming unicast connection with client."""
+        print(f"Connection established with {addr}")
+        try:
+            while self.client_running:
+                data = conn.recv(1024)
+                if not data:
+                    break  # Connection disconnected
+
+                message = json.loads(data.decode())
+                message_type = message.get("message_type")
+
+                if message_type == "WORD_GUESS":
+                    print(f"Client asked to guess word by primary server.")
+                    timestamp = message["timestamp"]
+                    guessed_word = input("Please guess the word: ").strip()
+                    # send back the guessed word and message id (for now we consider the timestamp as the message id)
+                    response = json.dumps({
+                        "message_type": "WORD_GUESS_RESPONSE",
+                        "guess": guessed_word,
+                        "message_id": timestamp
+                    })
+                    conn.sendall(response.encode())
+                elif message_type == "GAME_WINNER_CORRECT_WORD":
+                    display_message = message["message"]
+                    print(display_message)
+                elif message_type == "FINAL_RESULT_CORRECT_WORD_GUESSED" or message_type == "GAME_WINNER_INCORRECT_WORD" or message_type == "FINAL_RESULT_CORRECT_WORD_NOT_GUESSED":
+                    display_message = message["message"]
+                    correct_word = message["correct_word"]
+                    print(display_message)
+                    print(f"The correct word was {correct_word}")
+        except Exception as e:
+            print(f"Error with connection {addr}: {e}")
+        finally:
+            print(f"Closing connection with {addr}")
+            conn.close()
 
     def receive_server_details(self):
         """Run the multicast client and continuously listen for server details."""
         print(f"Listening for multicast on {self.multicast_group}:{self.multicast_port}")
-        self.sock = create_multicast_client_socket(self.multicast_group, self.multicast_port)
+        sock = create_multicast_client_socket(self.multicast_group, self.multicast_port)
 
         while not self.server_ip or not self.server_port:
             try:
                 # Continuously receive multicast messages until valid server details are obtained
-                data, address = self.sock.recvfrom(1024)
+                data, address = sock.recvfrom(1024)
                 message = data.decode()
 
                 try:
@@ -84,32 +150,14 @@ class Client:
                 except json.JSONDecodeError:
                     print(f"Received invalid JSON message from {address}: {message}")
 
-            except socket.error as e:
+            except Exception as e:
                 print(f"Error receiving multicast message: {e}")
+                break
 
-        if self.sock:
-            self.sock.close()
-            self.sock = None
+        sock.close()
         print("Stopped multicast listener.")
 
-    def stop_client(self):
-        """
-        Stop the client and clean up resources
-        """
-        self.running = False
-
-        if self.sock:
-            print('Closing socket...')
-            self.sock.close()
-            self.sock = None
-
-        # Wait for the client thread to finish
-        if hasattr(self, 'client_thread') and self.client_thread.is_alive():
-            self.client_thread.join()
-
-        print('Client stopped')
-
-    def start_unicast_client(self):
+    def connect_to_server(self):
         """Establish a unicast connection to the server."""
         try:
             print(f"Connecting to server {self.server_ip}:{self.server_port}")
@@ -117,7 +165,8 @@ class Client:
                 client_socket.bind((self.client_ip, self.client_port))
                 client_socket.connect((self.server_ip, self.server_port))
 
-                client_details = json.dumps({"client_ip": self.client_ip, "client_port": self.client_port, "message_type": "CLIENT_CONNECTION_TO_SERVER"})
+                client_details = json.dumps({"client_ip": self.client_ip, "client_port": self.client_port,
+                                             "message_type": "CLIENT_CONNECTION_TO_SERVER"})
                 client_socket.sendall(client_details.encode())
                 response = client_socket.recv(1024)
                 print(f"Unicast response from server: {response.decode()}")
@@ -127,13 +176,25 @@ class Client:
     def stop(self):
         """Stop the client."""
         print("Stopping client...")
+
+        self.client_running = False
         if self.sock:
             self.sock.close()
+            self.sock = None
+
+        # Wait for the client thread to finish
+        if hasattr(self, 'client_thread') and self.client_thread.is_alive():
+            self.client_thread.join()
         print("Client stopped.")
 
 
 if __name__ == '__main__':
-    client = Client('224.3.29.71', 10000, '127.0.0.2', 5005)
+    parser = argparse.ArgumentParser(description="Start a client.")
+    parser.add_argument("ip", type=str, help="IP address of the client.")
+    parser.add_argument("port", type=int, help="Port number of the client.")
+
+    arguments = parser.parse_args()
+    client = Client('224.3.29.71', 10000, arguments.ip, arguments.port)
     try:
         client.start()
     except KeyboardInterrupt:
