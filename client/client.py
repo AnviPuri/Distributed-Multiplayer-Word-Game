@@ -65,9 +65,10 @@ class Client:
 
     def start_unicast_client(self):
         """Start the unicast client to handle incoming connections."""
+
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.bind((self.client_ip, self.client_port))
+            self.sock.bind((self.client_ip, 0))  # Let OS choose the port if 0 is used
             self.sock.listen(5)
             print(f"Unicast client listening on {self.client_ip}:{self.client_port}")
 
@@ -162,7 +163,7 @@ class Client:
         try:
             print(f"Connecting to server {self.server_ip}:{self.server_port}")
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-                client_socket.bind((self.client_ip, self.client_port))
+                client_socket.bind((self.client_ip, 0))  # Let OS pick the port
                 client_socket.connect((self.server_ip, self.server_port))
 
                 client_details = json.dumps({"client_ip": self.client_ip, "client_port": self.client_port,
