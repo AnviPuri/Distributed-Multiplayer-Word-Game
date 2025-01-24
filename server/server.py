@@ -7,10 +7,11 @@ import threading
 import time
 from server_details import ServerDetail
 from client_details import ClientDetail
-
 import os
 import sys
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from game.game import Game
 
 
@@ -85,7 +86,7 @@ class Server:
             self.is_acknowledged_by_primary_server = True
 
         self.game_round = 1
-        self.max_game_round = 5
+        self.max_rounds= 5
         self.game_ended = False
 
     def start(self):
@@ -104,6 +105,7 @@ class Server:
             threading.Thread(target=self.send_multicast_for_backup, daemon=True).start()
 
         threading.Thread(target=self.listen_multicast_messages, daemon=True).start()
+        time.sleep(60)
         threading.Thread(target=self.start_game(), daemon=True).start()
 
         # Keep the main thread alive to allow background threads to continue running
@@ -465,9 +467,7 @@ class Server:
                     print("Starting the game...")
                     game = Game()
                     game.choose_word()
-                    # self.reset_game_state()
-                    # self.run_game()
-                    while self.game_round <= self.max_game_round:
+                    while self.game_round <= self.max_rounds:
                         print(f"Round {self.game_round} begins.")
                         self.play_round(game)
                         self.enable_all_connected_clients_to_play()
@@ -481,7 +481,7 @@ class Server:
                     self.end_game()
                 else:
                     print("Not enough clients to start the game.")
-                time.sleep(10)  # Wait for 60 seconds before checking whether game can be started.
+                time.sleep(60)  # Wait for 60 seconds before checking whether game can be started.
         except KeyboardInterrupt:
             print('Multicast server stopped.')
 

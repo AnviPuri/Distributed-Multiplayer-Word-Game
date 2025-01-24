@@ -72,6 +72,7 @@ class Client:
 
     def start_unicast_client(self):
         """Start the unicast client to handle incoming connections."""
+
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.bind((self.client_ip, self.client_port))
