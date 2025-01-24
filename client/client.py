@@ -63,6 +63,13 @@ class Client:
         else:
             print("Failed to retrieve server details. Cannot proceed with unicast connection.")
 
+        try:
+            while self.client_running:
+                threading.Event().wait(1)
+        except KeyboardInterrupt:
+            print("Client interrupted by user.")
+            self.stop()
+
     def start_unicast_client(self):
         """Start the unicast client to handle incoming connections."""
         try:
@@ -162,7 +169,6 @@ class Client:
         try:
             print(f"Connecting to server {self.server_ip}:{self.server_port}")
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client_socket:
-                client_socket.bind((self.client_ip, self.client_port))
                 client_socket.connect((self.server_ip, self.server_port))
 
                 client_details = json.dumps({"client_ip": self.client_ip, "client_port": self.client_port,

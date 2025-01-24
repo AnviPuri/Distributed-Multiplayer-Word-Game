@@ -7,7 +7,11 @@ import threading
 import time
 from server_details import ServerDetail
 from client_details import ClientDetail
-from game.py import Game
+
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from game.game import Game
 
 
 # Primary server -
@@ -457,27 +461,27 @@ class Server:
         """Start the game if we have more than 1 client connected."""
         try:
             while self.server_running:
-                if len(self.server.connected_clients) > 1:
+                if len(self.connected_clients) > 1:
                     print("Starting the game...")
                     game = Game()
                     game.choose_word()
                     # self.reset_game_state()
                     # self.run_game()
-                    while self.round <= self.max_rounds:
-                        print(f"Round {self.round} begins.")
+                    while self.game_round <= self.max_game_round:
+                        print(f"Round {self.game_round} begins.")
                         self.play_round(game)
                         self.enable_all_connected_clients_to_play()
                         if self.game_ended:
                             print("Correct Word has been guessed!")
                             self.end_game()
                             break
-                        self.round += 1
+                        self.game_round += 1
                     print("Game Over...")
                     self.notify_end_result(game)
                     self.end_game()
                 else:
                     print("Not enough clients to start the game.")
-                time.sleep(60)  # Wait for 60 seconds before checking whether game can be started.
+                time.sleep(10)  # Wait for 60 seconds before checking whether game can be started.
         except KeyboardInterrupt:
             print('Multicast server stopped.')
 
@@ -528,10 +532,17 @@ class Server:
                 print(f"Requested client {client.ip}:{client.port} to guess the word.")
 
                 # Wait for the client to send their guess
-                sock.settimeout(10)  # Setting a timeout to avoid indefinite blocking
+                # sock.settimeout(10)  # Setting a timeout to avoid indefinite blocking
                 # the response will contain the guessed word and message id ( for now the timestamp will act as the message id)
-                response = sock.recv(1024).decode()
-                guessed_word = json.loads(response).get("guessed_word")
+                data = sock.recv(1024)
+                print(f"Recieved {data}")
+
+                message = json.loads(data.decode())
+                server_ip = message.get("ip")
+                server_port = message.get("port")
+
+                response = json.loads(data.decode())
+                guessed_word = response.get("guess")
                 print(f"Received guess '{guessed_word}' from Client {client.ip}:{client.port}.")
                 return guessed_word
         except ConnectionRefusedError:
@@ -540,12 +551,12 @@ class Server:
     def notify_guess_result(self, client):
         """Notify a single client of their score and guesses."""
         try:
-            message = {
+            message = json.dumps({
                 "message_type": "INCORRECT_GUESS_NOTIFICATION",
                 "score": client.client_score,
                 "word_interpretation": client.last_word_interpretation,
                 "guessed_word": client.last_played_word
-            }
+            })
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.connect((client.ip, client.port))
                 sock.sendall(message.encode())
@@ -608,7 +619,7 @@ class Server:
 
     def reset_game_state(self):
         """Reset game variables for each game."""
-        self.round = 1
+        self.game_round = 1
         # self.scores = {client.ip: 0 for client in self.server.connected_clients}
         self.game_ended = False
         # self.clients = deque(self.server.connected_clients)  # FIFO order
