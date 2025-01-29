@@ -126,6 +126,13 @@ class Client:
                     correct_word = message["correct_word"]
                     print(display_message)
                     print(f"The correct word was {correct_word}")
+                elif message_type == "INCORRECT_GUESS_NOTIFICATION":
+                    score = message["score"]
+                    word_interpretation = message["word_interpretation"]
+                    guessed_word = message["guessed_word"]
+                    print(f"You guess was incorrect!")
+                    print(f"The interpretation for your guessed word : {guessed_word} is {word_interpretation}!")
+                    print(f"Your current score in the game is {score}")
         except Exception as e:
             print(f"Error with connection {addr}: {e}")
         finally:

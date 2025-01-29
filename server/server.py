@@ -14,15 +14,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from game.game import Game
 
-
-# Primary server -
-# 1. start multicast thread for sending its own information
-# 2. keep on listening multicast thread for other servers
-# 3. build unicast connection with client and other servers
-# Backup server -
-# 1. send multicast message for 5 minutes every 30 seconds
-# 2. Build unicast connection (bidirectional: with primary and backup servers - they will initiate the connection)
-
 def create_multicast_sender_socket():
     """
     Create and configure a socket for multicast sending.
@@ -34,7 +25,6 @@ def create_multicast_sender_socket():
     ttl = struct.pack('b', 1)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
     return sock
-
 
 def create_multicast_receiver_socket(multicast_group, port):
     """
@@ -76,8 +66,8 @@ class Server:
         self.connected_clients = []
 
         self.last_heartbeat = {}
-        self.heartbeat_interval = 10  # seconds
-        self.heartbeat_timeout = 30  # seconds
+        self.heartbeat_interval = 10
+        self.heartbeat_timeout = 30
         self.heartbeat_failed_flag = False  # Global flag to indicate heartbeat failure
 
         if self.is_primary_server is True:
@@ -86,7 +76,7 @@ class Server:
             self.is_acknowledged_by_primary_server = True
 
         self.game_round = 1
-        self.max_rounds= 5
+        self.max_rounds= 3
         self.game_ended = False
 
     def start(self):
@@ -105,7 +95,7 @@ class Server:
             threading.Thread(target=self.send_multicast_for_backup, daemon=True).start()
 
         threading.Thread(target=self.listen_multicast_messages, daemon=True).start()
-        time.sleep(60)
+        time.sleep(30)
         threading.Thread(target=self.start_game(), daemon=True).start()
 
         # Keep the main thread alive to allow background threads to continue running
@@ -467,12 +457,15 @@ class Server:
                     print("Starting the game...")
                     game = Game()
                     game.choose_word()
+                    self.enable_all_connected_clients_to_play()
                     while self.game_round <= self.max_rounds:
                         print(f"Round {self.game_round} begins.")
                         self.play_round(game)
                         self.enable_all_connected_clients_to_play()
                         if self.game_ended:
                             print("Correct Word has been guessed!")
+                            print("Game Over...")
+                            self.notify_end_result(game)
                             self.end_game()
                             break
                         self.game_round += 1
@@ -485,16 +478,13 @@ class Server:
         except KeyboardInterrupt:
             print('Multicast server stopped.')
 
-    def enable_all_connected_clients_to_play(self):
-        for client in self.connected_clients:
-            if not client.can_play_the_round:
-                client.setCanPlayTheRound(True)
-
     def play_round(self, game):
         """Each client guesses the word in FIFO order."""
         for client in self.connected_clients:
             if client.can_play_the_round:
                 self.ask_client_to_guess(client, game)
+                if(self.game_ended):
+                    break
 
     def ask_client_to_guess(self, client, game):
         """
@@ -503,17 +493,17 @@ class Server:
         """
         print(f"Client {client.ip} making a guess.")
         guessed_word = self.receive_client_guess(client)
-        client.setLastPlayedWord(guessed_word)
+        client.set_last_played_word(guessed_word)
         result = game.get_game_result(guessed_word, client.client_score)
 
         if result["result_output"] == "CORRECT_GUESS":
             print("Client guessed the correct word!")
             self.game_ended = True
-            client.setHasGuessedWord(True)
+            client.set_has_guessed_word(True)
         else:
             print("Client guessed an incorrect word!")
-            client.setClientScore(result["updated_score"])
-            client.setLastWordInterpretation(result["last_word_interpretation"])
+            client.set_client_score(result["updated_score"])
+            client.set_last_word_interpretation(result["last_word_interpretation"])
             self.notify_guess_result(client)
 
     def receive_client_guess(self, client):
@@ -568,7 +558,7 @@ class Server:
         """Notify all clients of the game result."""
         message = {}
         winner_details = self.get_winner()
-        for client in self.server.connected_clients:
+        for client in self.connected_clients:
             if self.game_ended:
                 print("Game ended by guessing the correct word")
                 if client.has_guessed_word:
@@ -591,7 +581,7 @@ class Server:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                     sock.connect((client.ip, client.port))
-                    sock.sendall(message.encode())
+                    sock.sendall(json.dumps(message).encode())
                     print(f"Client {client.ip}:{client.port} informed about the final result.")
             except ConnectionRefusedError:
                 print(f"Error sending message to client at {client.ip}:{client.port}: Connection refused")
@@ -599,30 +589,42 @@ class Server:
     def get_winner(self):
         winner_details = {}
         if self.game_ended:
-            for client in self.server.connected_clients:
+            for client in self.connected_clients:
                 if client.has_guessed_word:
                     # later replace ip and port with player username
                     winner_details["ip"] = client.ip
                     winner_details["port"] = client.port
                     break
         else:
-            client_with_max_score = max(self.server.connected_clients, key=lambda client: client.client_score)
+            client_with_max_score = max(self.connected_clients, key=lambda client: client.client_score)
             winner_details["ip"] = client_with_max_score.ip
             winner_details["port"] = client_with_max_score.port
-            winner_details[["winner_score"]] = client_with_max_score.client_score
+            winner_details["winner_score"] = client_with_max_score.client_score
         return winner_details
+
+    def enable_all_connected_clients_to_play(self):
+        for client in self.connected_clients:
+            if not client.can_play_the_round:
+                client.set_can_play_round(True)
+
+    def reset_all_connected_clients_state(self):
+        for client in self.connected_clients:
+            if not client.can_play_the_round:
+                client.set_can_play_round(True)
 
     def end_game(self):
         """End the game and declare the winner."""
         self.reset_game_state()
+        print("Game will start again after a minute...")
+        time.sleep(60)
         self.start_game()
 
     def reset_game_state(self):
         """Reset game variables for each game."""
         self.game_round = 1
-        # self.scores = {client.ip: 0 for client in self.server.connected_clients}
         self.game_ended = False
-        # self.clients = deque(self.server.connected_clients)  # FIFO order
+        self.reset_all_connected_clients_state()
+        # self.clients = deque(self.connected_clients)  # How to implement FIFO order
 
     def stop(self):
         """Stop the server and cleanup resources"""
