@@ -3,6 +3,7 @@ import datetime
 import json
 import socket
 import struct
+
 import subprocess
 import threading
 import time
@@ -11,9 +12,11 @@ from client_details import ClientDetail
 import os
 import sys
 
+
 from server_details import ServerDetail
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 
 from game.game import Game
 
@@ -66,6 +69,7 @@ class Server:
         self.is_acknowledged_by_primary_server = False
 
         self.connected_servers = []
+
         self.total_connected_servers = []
         self.connected_clients = []
         self.new_primary_server = []
@@ -79,6 +83,7 @@ class Server:
             self.server_id = 1
             self.id_counter = 1
             self.is_acknowledged_by_primary_server = True
+
 
         self.game_round = 1
         self.max_rounds= 3
@@ -165,13 +170,6 @@ class Server:
                             sock.connect((server.ip, server.port))
                             sock.sendall(heartbeat_message.encode())
                             print(f"Sent heartbeat to {server.ip}:{server.port}")
-
-                time.sleep(self.heartbeat_interval)
-            except ConnectionRefusedError:
-                print(f"Error sending heartbeat to {server.id} at {server.ip}:{server.port}: Connection refused")
-                self.connected_servers.remove(server)  # Remove unresponsive server from the list
-            except Exception as e:
-                print(f"Unexpected error during heartbeat: {e}")
 
     def start_unicast_server(self):
         """Start the unicast server to handle incoming connections."""
