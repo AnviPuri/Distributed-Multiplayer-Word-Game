@@ -12,9 +12,11 @@ from client_details import ClientDetail
 import os
 import sys
 
+
 from server_details import ServerDetail
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 
 from game.game import Game
 
@@ -49,6 +51,7 @@ def create_multicast_receiver_socket(multicast_group, port):
 
     return sock
 
+
 class Server:
     def __init__(self, server_ip, server_port, is_primary_server):
         """Initializing the Server class"""
@@ -73,6 +76,7 @@ class Server:
         self.new_primary_server = []
         self.received_higher_id_response = False
 
+
         self.last_heartbeat = {}
         self.heartbeat_interval = 10
         self.heartbeat_timeout = 30
@@ -82,6 +86,7 @@ class Server:
             self.server_id = 1
             self.id_counter = 1
             self.is_acknowledged_by_primary_server = True
+
 
         self.game_round = 1
         self.max_rounds= 3
@@ -121,6 +126,7 @@ class Server:
         except:
             return False
 
+
     def send_heartbeat(self):
         """
     Sends periodic heartbeat messages to all connected servers.
@@ -145,6 +151,7 @@ class Server:
                 print(f"Error sending heartbeat to {server.id} at {server.ip}:{server.port}: Connection refused")
                 self.heartbeat_failed_flag = True  # Set the flag to indicate failure
                 break
+
 
     # def send_heartbeat_backup(self):
     #     """
@@ -253,6 +260,7 @@ class Server:
         # Reset the heartbeat failure flag
         self.heartbeat_failed_flag = False
 
+
     def leader_election(self):
         """Run leader election using the Bully Algorithm when the primary server fails."""
         print("Starting leader election...")
@@ -269,8 +277,6 @@ class Server:
 
             if highest_id_server.id == self.server_id:
                 # Declare self as primary
-                self.connected_servers.append(highest_id_server)
-
                 self.declare_self_as_leader()
             
 
@@ -306,6 +312,7 @@ class Server:
             threading.Thread(target=self.send_heartbeat, daemon=True).start()
             self.heartbeat_failed_flag = False
 
+
     def send_leader_announcement(self, server):
         """Notify backup servers that a new primary has been elected."""
         message = {
@@ -327,6 +334,7 @@ class Server:
         # Wait for a response
         time.sleep(3)  # Adjust the timeout as needed
 
+
     def send_multicast_announcement(self):
         """Send a multicast message to announce the new primary leader."""
         sock = create_multicast_sender_socket()
@@ -343,6 +351,7 @@ class Server:
             print(f"Error sending multicast announcement: {e}")
         finally:
             sock.close()
+
 
     def send_message(self, server, message):
         """Send a JSON message to another server over a socket connection."""
@@ -435,6 +444,7 @@ class Server:
 
                     # Stop the election process if this server was running one
                     self.received_higher_id_response = True
+
 
         except Exception as e:
             print(f"Error with connection {addr}: {e}")
@@ -801,6 +811,7 @@ class Server:
             self.server_socket.close()
         print("Server stopped.")
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Start a server (primary or backup).")
     parser.add_argument("ip", type=str, help="IP address of the server.")
@@ -817,5 +828,3 @@ if __name__ == "__main__":
         print("Shutting down server...")
         # trigger this externally?
         server.stop()
-
-
