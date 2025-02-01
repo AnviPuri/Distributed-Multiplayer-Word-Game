@@ -111,8 +111,11 @@ class Server:
             threading.Thread(target=self.send_multicast_for_backup, daemon=True).start()
            
         threading.Thread(target=self.listen_multicast_messages, daemon=True).start()
-        threading.Thread(target=self.start_game, daemon=True).start()
-        
+
+        time.sleep(60)
+
+        if self.is_primary_server:
+            threading.Thread(target=self.start_game, daemon=True).start()
 
         # Keep the main thread alive to allow background threads to continue running
         try:
@@ -181,11 +184,6 @@ class Server:
                     print(f"Error sending game state to backup server {server.ip}:{server.port}: Connection refused")
                 except Exception as e:
                     print(f"Unexpected error sending game state to backup server {server.ip}:{server.port}: {e}")
-
-
-    
-
-
 
     def start_game_state_sync(self):
         """
