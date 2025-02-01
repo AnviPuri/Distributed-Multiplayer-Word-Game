@@ -170,6 +170,8 @@ class Server:
                             sock.connect((server.ip, server.port))
                             sock.sendall(heartbeat_message.encode())
                             print(f"Sent heartbeat to {server.ip}:{server.port}")
+            except Exception as e:
+                print(f"Error sending heartbeat.")
 
     def start_unicast_server(self):
         """Start the unicast server to handle incoming connections."""

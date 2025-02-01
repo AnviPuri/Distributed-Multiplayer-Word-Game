@@ -110,6 +110,11 @@ class Client:
                 if message_type == "WORD_GUESS":
                     print(f"Client asked to guess word by primary server.")
                     timestamp = message["timestamp"]
+                    while True:
+                        guessed_word = input("Please guess a 5-letter word: ").strip()
+                        if len(guessed_word) == 5 and guessed_word.isalpha():
+                            break
+                        print("Invalid input. Please enter exactly 5 letters.")
                     guessed_word = input("Please guess the word: ").strip()
                     # send back the guessed word and message id (for now we consider the timestamp as the message id)
                     response = json.dumps({
