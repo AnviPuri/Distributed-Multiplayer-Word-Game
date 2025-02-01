@@ -103,7 +103,7 @@ class Server:
         if self.is_primary_server:
             threading.Thread(target=self.send_heartbeat, daemon=True).start()
             threading.Thread(target=self.send_multicast_message, daemon=True).start()
-            threading.Thread(target=self.start_game_state_sync, daemon=True).start()  # Start game 
+            # threading.Thread(target=self.start_game_state_sync, daemon=True).start()  # Start game
 
         
         else:
@@ -115,6 +115,7 @@ class Server:
         time.sleep(60)
 
         if self.is_primary_server:
+            print("Starting Game")
             threading.Thread(target=self.start_game, daemon=True).start()
 
         # Keep the main thread alive to allow background threads to continue running
@@ -720,25 +721,27 @@ class Server:
         """Start the game if we have more than 1 client connected."""
         try:
             while self.server_running:
+                print("Check")
                 if len(self.connected_clients) > 1:
                     print("Starting the game...")
-                    self.game.choose_word()  # Initialize the game word
-                    print(f"Word of the game is: {self.game.current_word}")
+                    game = Game()
+                    game.choose_word()
+                    print(f"Word of the game is: {self.current_word}")
                     self.game_started = True  # Set the game started flag
                     self.enable_all_connected_clients_to_play()
                     while self.game_round <= self.max_rounds:
                         print(f"Round {self.game_round} begins.")
-                        self.play_round(self.game)
+                        self.play_round(game)
                         self.enable_all_connected_clients_to_play()
                         if self.game_ended:
                             print("Correct Word has been guessed!")
                             print("Game Over...")
-                            self.notify_end_result(self.game)
+                            self.notify_end_result(game)
                             self.end_game()
                             break
                         self.game_round += 1
                     print("Game Over...")
-                    self.notify_end_result(self.game)
+                    self.notify_end_result(game)
                     self.end_game()
                 else:
                     print("Not enough clients to start the game.")
