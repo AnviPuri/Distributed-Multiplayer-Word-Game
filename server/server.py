@@ -63,6 +63,7 @@ class Server:
         self.server_socket = None
 
         self.multicast_group = '224.3.29.71'
+        # remove this as is_primary_server attribute can be used
         self.is_primary=self.is_primary_server
         self.multicast_port = 10000
 
