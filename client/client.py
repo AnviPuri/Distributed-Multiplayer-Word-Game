@@ -2,6 +2,7 @@ import argparse
 import json
 import socket
 import struct
+import sys
 import threading
 
 
@@ -16,8 +17,16 @@ def create_multicast_client_socket(multicast_group, port):
 
     # Allow multiple sockets to use the same port - this is crucial for multicast
     # where multiple clients need to listen on the same address/port combination
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    if sys.platform == "win32":  # Windows
+
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    elif sys.platform == "darwin":  # macOS
+            
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)  # Only for macOS
+    else:
+            raise RuntimeError("Unsupported platform")
 
     # Bind to all interfaces on the specified port
     sock.bind(('', port))

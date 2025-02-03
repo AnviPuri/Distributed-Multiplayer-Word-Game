@@ -38,10 +38,18 @@ def create_multicast_receiver_socket(multicast_group, port):
     """
     print("Creating multicast receiver socket.")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    if sys.platform == "win32":  # Windows
 
-    # Bind to the multicast address and port
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+    elif sys.platform == "darwin":  # macOS
+        
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)  # Only for macOS
+    else:
+        raise RuntimeError("Unsupported platform")
+    
+        # Bind to the multicast address and port
     sock.bind(('', port))
 
     # Join the multicast group
@@ -511,8 +519,13 @@ class Server:
                         server_id=message["server_id"],
                         is_primary=False
                     )
-                    self.connected_servers.append(new_server)
-                    print(f"Added server: {new_server.ip}:{new_server.port}")
+
+                    if not self.is_server_in_connected_list(new_server.ip, new_server.port):
+                        self.connected_servers.append(new_server)
+                        print(f"Added server: {new_server.ip}:{new_server.port}")
+                    else:
+                        print(f"Server {new_server.ip}:{new_server.port} already exists in the connected servers list.")
+                      
                     response = json.dumps({
                         "message_type": "NEW_BACKUP_ADDITION",
                         "server_id": self.server_id,
@@ -543,8 +556,12 @@ class Server:
                         ip=message["client_ip"],
                         port=message["client_port"]
                     )
-                    self.connected_clients.append(new_client)
-                    print(f"Added client: {new_client.ip}:{new_client.port}")
+                    if not self.is_client_in_connected_list(new_client.ip, new_client.port):
+                        self.connected_clients.append(new_client)
+                        print(f"Added client: {new_client.ip}:{new_client.port}")
+                    else:
+                        print(f"Client {new_client.ip}:{new_client.port} already exists in the connected clients list.")
+                    
                     conn.sendall(b"Received and saved client details.")
                 
                 elif message_type == "GAME_STATE_UPDATE":
@@ -638,24 +655,29 @@ class Server:
                         if self.is_primary_server and message.get(
                                 "is_acknowledged_by_primary_server") == "N" and not self.is_server_in_connected_list(
                             server_ip, server_port):
-                            new_server_id = self.id_counter + 1
-                            self.id_counter += 1
-                            response = json.dumps({
-                                "message_type": "PRIMARY_CONNECTION_TO_BACKUP",
-                                "server_id": self.server_id,
-                                "ip": self.server_ip,
-                                "port": self.server_port,
-                                "new_server_id": new_server_id
-                            })
-                            self.connect_to_backup_server(message["ip"], message["port"], response)
-                            new_server = ServerDetail(
-                                ip=message["ip"],
-                                port=message["port"],
-                                server_id=new_server_id,
-                                is_primary=False
-                            )
-                            self.connected_servers.append(new_server)
-                            print(f"Added to list of servers: {new_server.ip}:{new_server.port}")
+                            if not self.is_server_in_connected_list(server_ip, server_port):
+                                new_server_id = self.id_counter + 1
+                                self.id_counter += 1
+                                response = json.dumps({
+                                    "message_type": "PRIMARY_CONNECTION_TO_BACKUP",
+                                    "server_id": self.server_id,
+                                    "ip": self.server_ip,
+                                    "port": self.server_port,
+                                    "new_server_id": new_server_id
+                                })
+                                self.connect_to_backup_server(message["ip"], message["port"], response)
+                                new_server = ServerDetail(
+                                    ip=message["ip"],
+                                    port=message["port"],
+                                    server_id=new_server_id,
+                                    is_primary=False
+                                )
+                                self.connected_servers.append(new_server)
+                                print(f"Added to list of servers: {new_server.ip}:{new_server.port}")
+                            else:
+                                print(f"Server {server_ip}:{server_port} already exists in the connected servers list.")
+
+
                         elif not self.is_primary_server and not self.is_server_in_connected_list(server_ip, server_port):
                             # in case of a backup server only establish unicast connection when "is_acknowledged_by_primary_server" is set to Y
                             # backup servers send their details - ip, port, id and message_type and in turn receive the backup servers id which they then store
@@ -693,14 +715,25 @@ class Server:
                         message = json.loads(data.decode())
                         if message.get("message_type") == "NEW_BACKUP_ADDITION":
                             print(f"Adding new bakcup server using: {message}")
-                            new_server = ServerDetail(
-                                ip=backup_server_ip,
-                                port=backup_server_port,
-                                server_id=message.get("server_id"),
-                                is_primary=False
-                            )
-                            self.connected_servers.append(new_server)
-                            print(f"New Backup server added to list of servers.")
+                            if not self.is_server_in_connected_list(backup_server_ip, backup_server_port):
+                                new_server = ServerDetail(
+                                    ip=backup_server_ip,
+                                    port=backup_server_port,
+                                    server_id=message.get("server_id"),
+                                    is_primary=False
+                                )
+                                self.connected_servers.append(new_server)
+                                print(f"New Backup server added to list of servers.")
+                            else:
+                                print(f"Server {backup_server_ip}:{backup_server_port} already exists in the connected servers list.")
+                                new_server = ServerDetail(
+                                    ip=backup_server_ip,
+                                    port=backup_server_port,
+                                    server_id=message.get("server_id"),
+                                    is_primary=False
+                                )
+                                self.connected_servers.append(new_server)
+                                print(f"New Backup server added to list of servers.")
         except Exception as e:
             print(f"Error connecting to backup server: {e}")
 
@@ -717,6 +750,18 @@ class Server:
                 return True
         return False
 
+    def is_client_in_connected_list(self, new_client_ip, new_client_port):
+        """
+        Check if a client with the given IP and port exists in the connected clients list.
+
+        :param new_client_ip: IP address of the client to search for.
+        :param new_client_port: Port number of the client to search for.
+        :return: True if a client with the given IP and port exists, otherwise False.
+        """
+        for client in self.connected_clients:
+            if client.ip == new_client_ip and client.port == new_client_port:
+                return True
+        return False
     def start_game(self):
         """Start the game if we have more than 1 client connected."""
         try:
