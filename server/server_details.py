@@ -7,3 +7,6 @@ class ServerDetail:
         self.is_primary = is_primary
         self.is_responding = is_responding
 
+    def set_is_primary(self, is_primary):
+        self.is_primary = is_primary
+

@@ -76,13 +76,12 @@ class Client:
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.bind((self.client_ip, self.client_port))
-            self.sock.listen(5)
+            self.sock.listen(10)
             print(f"Unicast client listening on {self.client_ip}:{self.client_port}")
 
             while self.client_running:
                 try:
                     conn, addr = self.sock.accept()
-                    print(f"Establishing Connection...")
                     connection_thread = threading.Thread(target=self.handle_connection, args=(conn, addr))
                     connection_thread.daemon = True
                     connection_thread.start()
@@ -97,7 +96,6 @@ class Client:
 
     def handle_connection(self, conn, addr):
         """Handle incoming unicast connection with client."""
-        print(f"Connection established with {addr}")
         try:
             while self.client_running:
                 data = conn.recv(1024)
@@ -115,7 +113,6 @@ class Client:
                         if len(guessed_word) == 5 and guessed_word.isalpha():
                             break
                         print("Invalid input. Please enter exactly 5 letters.")
-                    guessed_word = input("Please guess the word: ").strip()
                     # send back the guessed word and message id (for now we consider the timestamp as the message id)
                     response = json.dumps({
                         "message_type": "WORD_GUESS_RESPONSE",
@@ -138,15 +135,24 @@ class Client:
                     print(f"You guess was incorrect!")
                     print(f"The interpretation for your guessed word : {guessed_word} is {word_interpretation}!")
                     print(f"Your current score in the game is {score}")
+                elif message_type == "SERVER_FAILED":
+                    score = message["score"]
+                    if score > 0:
+                        print(f"Congrats! You had a score of {score} in the previous game.")
+                    print(
+                        "But looks like there is some problem. Please wait for another game to resume...")
+                    self.server_port = None
+                    self.server_ip = None
+                    self.receive_server_details()
+                    if self.server_ip and self.server_port:
+                        self.connect_to_server()
         except Exception as e:
             print(f"Error with connection {addr}: {e}")
         finally:
-            print(f"Closing connection with {addr}")
             conn.close()
 
     def receive_server_details(self):
         """Run the multicast client and continuously listen for server details."""
-        print(f"Listening for multicast on {self.multicast_group}:{self.multicast_port}")
         sock = create_multicast_client_socket(self.multicast_group, self.multicast_port)
 
         while not self.server_ip or not self.server_port:
@@ -157,25 +163,22 @@ class Client:
 
                 try:
                     server_data = json.loads(message)
-                    print(f"Received server data from {address}: {server_data}")
                     server_ip = server_data.get("ip")
                     server_port = server_data.get("port")
                     server_type = server_data.get("server_type")
 
                     if server_type == "Primary" and server_ip and server_port:
                         self.set_primary_server_details(server_ip, server_port)
-                        print(f"Primary server details set: IP={server_ip}, Port={server_port}")
+                        print(f"Primary server details set {server_ip}: {server_port}")
                     else:
                         print("Invalid server data received. Missing IP or port.")
                 except json.JSONDecodeError:
                     print(f"Received invalid JSON message from {address}: {message}")
-
             except Exception as e:
                 print(f"Error receiving multicast message: {e}")
                 break
 
         sock.close()
-        print("Stopped multicast listener.")
 
     def connect_to_server(self):
         """Establish a unicast connection to the server."""

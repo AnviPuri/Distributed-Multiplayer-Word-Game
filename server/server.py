@@ -17,14 +17,13 @@ from server_details import ServerDetail
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-
+from game_state_manager import GameStateManager
 from game.game import Game
 
 def create_multicast_sender_socket():
     """
     Create and configure a socket for multicast sending.
     """
-    print("Creating multicast sender socket.")
     # Create a UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     # Set the TTL for multicast messages
@@ -36,7 +35,6 @@ def create_multicast_receiver_socket(multicast_group, port):
     """
     Create and configure a socket for multicast receiving.
     """
-    print("Creating multicast receiver socket.")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
@@ -73,9 +71,10 @@ class Server:
         self.total_connected_servers = []
         self.connected_clients = []
         self.new_primary_server = []
+        self.received_higher_id_response = False # if even one responds set to true
 
         self.last_heartbeat = {}
-        self.heartbeat_interval = 10
+        self.heartbeat_interval = 15
         self.heartbeat_timeout = 30
         self.heartbeat_failed_flag = False  # Global flag to indicate heartbeat failure
 
@@ -84,64 +83,148 @@ class Server:
             self.id_counter = 1
             self.is_acknowledged_by_primary_server = True
 
-        self.game = Game()  # Initialize the game object here
+        self.game_state = GameStateManager()
 
-        self.game_round = 1
-        self.max_rounds= 3
+        self.current_game_word = None
+        self.game_round = 0
+        self.max_rounds= 5
         self.game_ended = False
+        self.game_stopped = False
         self.game_started = False  # Flag to indicate if the game has started
-
 
     def start(self):
         """Start the server with unicast and multicast behavior"""
         self.server_running = True
-
-        # Start unicast server to handle incoming connections
-        threading.Thread(target=self.start_unicast_server, daemon=True).start()
-
-        # Start multicast behavior based on server role
-        if self.is_primary_server:
+        try:
+            # Start unicast server to handle incoming connections
+            threading.Thread(target=self.start_unicast_server, daemon=True).start()
             threading.Thread(target=self.send_heartbeat, daemon=True).start()
-            threading.Thread(target=self.send_multicast_message, daemon=True).start()
-            # threading.Thread(target=self.start_game_state_sync, daemon=True).start()  # Start game
-
-        
-        else:
             threading.Thread(target=self.monitor_heartbeat, daemon=True).start()
-            threading.Thread(target=self.send_multicast_for_backup, daemon=True).start()
-           
-        threading.Thread(target=self.listen_multicast_messages, daemon=True).start()
+            threading.Thread(target=self.listen_multicast_messages, daemon=True).start()
 
-        time.sleep(60)
+            if self.is_primary_server:
+                threading.Thread(target=self.send_multicast_message, daemon=True).start()
+            else:
+                threading.Thread(target=self.send_multicast_for_backup, daemon=True).start()
 
-        if self.is_primary_server:
-            print("Starting Game")
-            threading.Thread(target=self.start_game, daemon=True).start()
+            time.sleep(15)
 
-        # Keep the main thread alive to allow background threads to continue running
+            if self.is_primary_server:
+                print("Starting Game")
+                threading.Thread(target=self.start_game, daemon=True).start()
+                threading.Thread(target=self.sync_loop, daemon=True).start()
+
+            # Keep the main thread alive to allow background threads to continue running
+            try:
+                while self.server_running:
+                    time.sleep(1)  # Keep the main thread alive
+            except KeyboardInterrupt:
+                print("Server shutting down...")
+                self.stop()
+        except Exception as e:
+            print(f"Error starting server: {e}")
+
+    def start_unicast_server(self):
+        """Start the unicast server to handle incoming connections."""
+        try:
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.bind((self.server_ip, self.server_port))
+            self.server_socket.listen(10)
+            print(f"Server listening on {self.server_ip}:{self.server_port} for receiving messages")
+
+            while self.server_running:
+                try:
+                    conn, addr = self.server_socket.accept()
+                    print(f"Establishing Connection...")
+                    client_thread = threading.Thread(target=self.handle_connection, args=(conn, addr))
+                    client_thread.daemon = True
+                    client_thread.start()
+                except Exception as e:
+                    print(f"Error during accept or client handling: {e}")
+        except Exception as e:
+            print(f"Error starting unicast server: {e}")
+        finally:
+            if self.server_socket:
+                self.server_socket.close()
+            print("Unicast server has been stopped.")
+
+    def handle_connection(self, conn, addr):
+        """Handle incoming unicast connection"""
+        print(f"Connection established with {addr}")
         try:
             while self.server_running:
-                time.sleep(1)  # Keep the main thread alive
-        except KeyboardInterrupt:
-            print("Server shutting down...")
-            self.stop()
+                data = conn.recv(1024)
+                if not data:
+                    break  # Client disconnected
 
-    def is_server_alive(server):
-        try:
-            with socket.create_connection((server.ip, server.port), timeout=2):
-                return True
-        except:
-            return False
+                message = json.loads(data.decode())
+                message_type = message.get("message_type")
 
+                if message_type == "BACKUP_CONNECTION_TO_BACKUP":
+                    print(f"Backup to Backup connection received from {addr}: {data.decode()}")
+                    new_server = ServerDetail(
+                        ip=message["ip"],
+                        port=message["port"],
+                        server_id=message["server_id"],
+                        is_primary=False
+                    )
+                    self.connected_servers.append(new_server)
+                    print(f"Added server: {new_server.ip}:{new_server.port}")
+                    response = json.dumps({
+                        "message_type": "NEW_BACKUP_ADDITION",
+                        "server_id": self.server_id,
+                    })
+                    conn.sendall(response.encode())
+                elif message_type == "HEARTBEAT":
+                    self.last_heartbeat[message["server_id"]] = datetime.datetime.now()
+                elif message_type == "PRIMARY_CONNECTION_TO_BACKUP":
+                    print(f"Primary to Backup connection received from {addr}: {data.decode()}")
+                    new_server = ServerDetail(
+                        ip=message["ip"],
+                        port=message["port"],
+                        server_id=message["server_id"],
+                        is_primary=True
+                    )
+                    self.connected_servers.append(new_server)
+                    print(f"Added server: {new_server.ip}:{new_server.port}")
+                    self.server_id = message["new_server_id"]
+                    self.is_acknowledged_by_primary_server = True
+                    conn.sendall(b"Received server id and added primary server details.")
+                elif message_type == "CLIENT_CONNECTION_TO_SERVER":
+                    print(f"Client to Primary connection received from {addr}: {data.decode()}")
+                    new_client = ClientDetail(
+                        ip=message["client_ip"],
+                        port=message["client_port"]
+                    )
+                    self.connected_clients.append(new_client)
+                    print(f"Added client: {new_client.ip}:{new_client.port}")
+                    conn.sendall(b"Received and saved client details.")
+                elif message_type == "GAME_STATE_UPDATE":
+                    print(f"Game state update received from {addr}: {message}")
+                    if isinstance(message["game_state"], str):
+                        game_state = json.loads(message["game_state"])
+                    else:
+                        game_state = message["game_state"]
+                    self.update_game_state(game_state)
+                    print("Game state updated on backup server.")
+                elif message_type == "ELECTION":
+                    print(f"Requested to start leader election by server: {message["candidate_id"]}")
+                    if not self.is_primary_server:
+                        self.leader_election()
+                    conn.sendall(b"Starting Leader Election...")
+        except Exception as e:
+            print(f"Error with connection {addr}: {e}")
+        finally:
+            print(f"Closing connection with {addr}")
+            conn.close()
 
     def get_game_state_snapshot(self):
         """
         Serialize the current game state into a JSON-compatible format.
         """
         game_state = {
-            "current_word": self.game.current_word if hasattr(self, 'game') else None,
+            "current_word": self.current_game_word,
             "game_round": self.game_round,
-            "max_rounds": self.max_rounds,
             "game_ended": self.game_ended,
             "connected_clients": [
                 {
@@ -172,6 +255,7 @@ class Server:
             "game_state": game_state_snapshot
         }
         message_json = json.dumps(message)
+        print(message_json)
 
         for server in self.connected_servers:
             if not server.is_primary:  # Send only to backup servers
@@ -186,130 +270,56 @@ class Server:
                 except Exception as e:
                     print(f"Unexpected error sending game state to backup server {server.ip}:{server.port}: {e}")
 
-    def start_game_state_sync(self):
+    def sync_loop(self):
         """
-        Start a thread to periodically send the game state to backup servers.
+        Periodically send the game state to backup servers.
         """
-        def sync_loop():
-            print("Game state sync thread started on primary server.")
-            while self.server_running:
-                print("Game state sync thread running...")
-                if self.is_primary_server and self.game_started:
-                    print("Primary server sending game state to backups...")
-                    self.send_game_state_to_backups()
-                else:
-                    print("Primary server does not have a game instance yet or game has not started.")
-                time.sleep(10)  # Send game state every 10 seconds
-
-        print("Starting game state sync thread...")
-        try:
-            sync_thread = threading.Thread(target=sync_loop, daemon=True)
-            sync_thread.start()
-            print(f"Game state sync thread started: {sync_thread.is_alive()}")
-        except Exception as e:
-            print(f"Error starting game state sync thread: {e}")
+        print("Game state sync thread started on primary server.")
+        while self.server_running:
+            print("Game state sync thread running...")
+            print("Primary server sending game state to backups...")
+            self.send_game_state_to_backups()
+            time.sleep(30)  # Send game state every 30 seconds
 
     def update_game_state(self, game_state):
         print("Received game state update!")
-        print(f"Game Round: {game_state['game_round']}, Max Rounds: {game_state['max_rounds']}")
-        print(f"Game Ended: {game_state['game_ended']}")
-        print(f"Current Word: {game_state['current_word']}")
 
-        self.game_round = game_state["game_round"]
-        self.max_rounds = game_state["max_rounds"]
-        self.game_ended = game_state["game_ended"]
-
-        if not hasattr(self, 'game'):
-            self.game = Game()
-        self.game.current_word = game_state["current_word"]
-
-        self.connected_clients = []
-        for client_data in game_state["connected_clients"]:
-            client = ClientDetail(client_data["ip"], client_data["port"])
-            client.client_score = client_data["client_score"]
-            client.has_guessed_word = client_data["has_guessed_word"]
-            client.last_played_word = client_data["last_played_word"]
-            client.last_word_interpretation = client_data["last_word_interpretation"]
-            client.can_play_the_round = client_data["can_play_the_round"]
-            self.connected_clients.append(client)
-
-        print(f"Updated game state for {len(self.connected_clients)} clients.")
+        game_round = game_state["game_round"]
+        game_ended = game_state["game_ended"]
+        current_game_word = game_state['current_word']
+        connected_clients = game_state["connected_clients"]
+        self.game_state.set_game_details(game_round, game_ended, current_game_word, connected_clients)
 
     def send_heartbeat(self):
         """
-    Sends periodic heartbeat messages to all connected servers.
-    Each heartbeat contains the server's ID and a timestamp.
-    If a server is unresponsive, it is removed from the list of connected servers.
-    Heartbeats are sent at intervals defined by `self.heartbeat_interval`.
-    """
+        Sends periodic heartbeat messages to all connected servers.
+        Each heartbeat contains the server's ID and a timestamp.
+        If a server is unresponsive, it is removed from the list of connected servers.
+        Heartbeats are sent at intervals defined by self.heartbeat_interval.
+        """
         while self.server_running:
-            try:
-                for server in self.connected_servers:
+            time.sleep(self.heartbeat_interval)
+            for server in self.connected_servers:
+                try:
                     heartbeat_message = json.dumps({
                         "message_type": "HEARTBEAT",
                         "server_id": self.server_id,
                         "timestamp": str(datetime.datetime.now())
                     })
+
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                        sock.settimeout(5)  # Set a timeout to avoid indefinite blocking
                         sock.connect((server.ip, server.port))
                         sock.sendall(heartbeat_message.encode())
+
                     print(f"Sent heartbeat to {server.ip}:{server.port}")
-                time.sleep(self.heartbeat_interval)
-            except ConnectionRefusedError:
-                print(f"Error sending heartbeat to {server.id} at {server.ip}:{server.port}: Connection refused")
-                self.connected_servers.remove(server)  # Remove unresponsive server from the list
 
-    def send_heartbeat_backup(self):
-        """
-        Sends periodic heartbeat messages to all connected servers.
-        Each heartbeat contains the server's ID and a timestamp.
-        If a server is unresponsive, it is removed from the list of connected servers.
-        Heartbeats are sent at intervals defined by `self.heartbeat_interval`.
-        """
-        while self.server_running and self.is_primary:
-            try:
-                for server in self.connected_servers:
-                    if server.id != self.server_id:  # Send heartbeat to all but the leader itself
-                        heartbeat_message = json.dumps({
-                            "message_type": "HEARTBEAT",
-                            "server_id": self.server_id,  # Send heartbeat from the elected leader
-                            "timestamp": str(datetime.datetime.now())
-                        })
-                        
-                        print(f"Sending heartbeat to Server ID={server.id} at {server.ip}:{server.port}")
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-                            sock.connect((server.ip, server.port))
-                            sock.sendall(heartbeat_message.encode())
-                            print(f"Sent heartbeat to {server.ip}:{server.port}")
-            except Exception as e:
-                print(f"Error sending heartbeat.")
-
-            except ConnectionRefusedError:
-                print(f"Error sending heartbeat to {server.id} at {server.ip}:{server.port}: Connection refused")
-
-    def start_unicast_server(self):
-        """Start the unicast server to handle incoming connections."""
-        try:
-            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.server_socket.bind((self.server_ip, self.server_port))
-            self.server_socket.listen(5)
-            print(f"Server listening on {self.server_ip}:{self.server_port} for receiving messages")
-
-            while self.server_running:
-                try:
-                    conn, addr = self.server_socket.accept()
-                    print(f"Establishing Connection...")
-                    client_thread = threading.Thread(target=self.handle_connection, args=(conn, addr))
-                    client_thread.daemon = True
-                    client_thread.start()
+                except ConnectionRefusedError:
+                    print(f"Error sending heartbeat to {server.id} at {server.ip}:{server.port}: Connection refused")
+                except socket.timeout:
+                    print(f"Timeout occurred while sending heartbeat to {server.ip}:{server.port}")
                 except Exception as e:
-                    print(f"Error during accept or client handling: {e}")
-        except Exception as e:
-            print(f"Error starting unicast server: {e}")
-        finally:
-            if self.server_socket:
-                self.server_socket.close()
-            print("Unicast server has been stopped.")
+                    print(f"Unexpected error sending heartbeat to {server.ip}:{server.port}: {e}")
 
     def monitor_heartbeat(self):
         """
@@ -318,247 +328,136 @@ class Server:
         If the unresponsive server is the primary, a leader election is triggered.
         Otherwise, the failure is handled for backup servers.
         """
-    
         while self.server_running:
+            print("Monitoring heartbeat...")
             now = datetime.datetime.now()
             for server in self.connected_servers:
                 last_heartbeat = self.last_heartbeat.get(server.id)
                 if last_heartbeat and (now - last_heartbeat).total_seconds() > self.heartbeat_timeout:
                     print(f"Server {server.id} at {server.ip}:{server.port} is unresponsive!")
                     self.connected_servers.remove(server)
-                    self.heartbeat_failed_flag = True
-                    if self.heartbeat_failed_flag == True:
-                        self.handle_heartbeat_failure(server)
+
+                    # If the unresponsive server is the primary, trigger leader election
+                    if server.is_primary:
+                        print("Primary server failure detected. Initiating leader election...")
+                        self.heartbeat_failed_flag = True
+                        self.leader_election()
                     else:
-                        print("Heartbeat failure not detected.")    
+                        print(f"Backup server {server.id} failure detected. Removed from connected servers list.")
+
+                    # Reset the heartbeat failure flag
+                    self.heartbeat_failed_flag = False
+
+                # Check if the heartbeat_failed_flag is set (leader failure)
+                if self.heartbeat_failed_flag:
+                    print("Leader failure detected. Initiating leader election...")
+                    self.leader_election()
+                    self.heartbeat_failed_flag = False  # Reset the flag after leader election
+
             time.sleep(self.heartbeat_interval)
 
-    def total_servers(self):
-        for i in self.connected_servers:
-            self.total_connected_servers.append(i)
-
-    def handle_heartbeat_failure(self, server):
-        """
-    Handles the actions when a heartbeat failure is detected for a server.
-    If the server is primary, initiates a leader election; if backup, removes it from the list.
-    Prints messages to log the server's failure and which action is taken.
-    Resets the heartbeat failure flag after handling the failure.
-     """
-        print(f"Handling heartbeat failure for server {server.id} at {server.ip}:{server.port}.")
-
-        if server.is_primary:
-            print("Primary server failure detected. Initiating leader election...")
-            self.leader_election()  # Pass the server ID of the failed primary server
-            self.total_servers()
-            self.leader_election()  # Pass the server ID of the failed primary server
-        else:
-            print(f"Backup server {server.id} failure detected. Removing from connected servers list.")
-
-        # Reset the heartbeat failure flag
-        self.heartbeat_failed_flag = False
-
-
-
-    # def leader_election(self):
-    #     """Run leader election when the primary server fails"""
-    #     print("Starting leader election...")
-
-    #     # Print the current server details
-    #     print(f"Current Running Server Details: ID={self.server_id}, IP={self.server_ip}, Port={self.server_port}")
-    #     current_server = ServerDetail(self.server_ip, self.server_port, self.server_id, False)
-
-
-    #     # Store server details in a dictionary
-    #     server_details_dict = {
-    #         "id": self.server_id,
-    #         "ip": self.server_ip,
-    #         "port": self.server_port,
-    #     }
-
-    #     # Print the connected servers information for debugging
-    #     print("Connected Servers Info:")
-
-    #     # Step 1: Elect the server with the highest ID as the new primary
-    #     if self.connected_servers:
-    #         # Add the current server to the list of connected servers for election
-    #         all_servers = self.connected_servers + [current_server]  # Add current server to the list
-
-    #         # Find the server with the highest ID
-    #         highest_id_server = max(all_servers, key=lambda server: server.id)
-
-    #         # Print the elected server details
-    #         print(f"Highest ID Server Details: ID={highest_id_server.id}, IP={highest_id_server.ip}, Port={highest_id_server.port}")
-
-    #         # Step 2: Mark the highest ID server as the new primary
-    #         highest_id_server.is_primary = True
-    #         print(f"Server {highest_id_server.id} with highest ID is now the primary server.")
-
-    #         # Step 3: Mark all other connected servers as backup (non-primary)
-    #         for server in self.connected_servers:
-    #             if server != highest_id_server:
-    #                 server.is_primary = False
-    #                 print(f"Server ID: {server.id}, IP: {server.ip}, Port: {server.port}, Is Primary: {server.is_primary}")
-
-    #         # Step 4: Ping all connected servers from the new primary
-    #         print("Ping message being sent from the new primary server...")
-    #         self.send_ping_to_connected_servers(highest_id_server)
-
-    #         # Step 5: Print updated server details after leader election
-            
-
-    #         # Now, use the primary flag to act as primary in the rest of your code
-    #         print(f"Elected primary server ID: {highest_id_server.id} at {highest_id_server.ip}:{highest_id_server.port}")
-    #         self.new_primary_server = highest_id_server.id
-    #         #self.send_heartbeat_backup(self.new_primary_server)
-    #         print("Updated Server Information after Leader Election:")
-    #         for server in self.connected_servers:
-    #                 print(f"Server ID: {server.id}, IP: {server.ip}, Port: {server.port}, Is Primary: {server.is_primary}")
-
-    #     else:
-    #         print("No connected servers available for leader election.")
-
-    
     def leader_election(self):
-
-
         """Run leader election using the Bully Algorithm when the primary server fails."""
         print("Starting leader election...")
 
-        # Print the current server details
-        print(f"Current Running Server Details: ID={self.server_id}, IP={self.server_ip}, Port={self.server_port}")
+        # Get current server details
+        print(f"Current Server ID={self.server_id}")
         current_server = ServerDetail(self.server_ip, self.server_port, self.server_id, False)
-        
-        print("Connected Servers Info:")
-        print(f"Connected Servers: {self.connected_servers} jjjjjjsjajjsaj")
-        if self.connected_servers:
-            # Add the current server to the list of connected servers for election
-            all_servers = self.connected_servers + [current_server]
 
-            # Find servers with IDs greater than the current server's ID
-            higher_id_servers = [server for server in all_servers if server.id > self.server_id]
+        if self.connected_servers:
+            higher_id_servers = [server for server in self.connected_servers if server.id < self.server_id]
 
             if not higher_id_servers:
-                # No higher ID servers, declare self as primary
-                self.declare_self_as_leader_test()
+                # No higher ID servers, declare self as leader
+                self.declare_self_as_leader()
             else:
-                self.send_election_messages_test(higher_id_servers)
+                # Send election messages to all higher ID servers
+                for server in higher_id_servers:
+                    self.send_election_message(server)
+
+                # Wait for a response
+                time.sleep(10)
+
+                if not self.received_higher_id_response:
+                    # No response from higher ID servers, declare self as leader
+                    self.declare_self_as_leader()
         else:
             print("No connected servers available for leader election.")
+            self.declare_self_as_leader()
 
-    def declare_self_as_leader_test(self):
-        """Declare the current server as the primary leader."""
-        print(f"Server {self.server_id} is now the primary leader.")
-        self.is_primary = True
-        self.send_heartbeat_test()
-        self.send_heartbeat_backup()
+    def declare_self_as_leader(self):
+        """Declare the current server as the new primary leader."""
+        if not self.is_primary_server:
+            print(f"Server {self.server_id} is now the primary leader.")
+            self.is_primary_server = True
+        if self.is_primary_server:
+            # Send multicast announcement to all servers
+            self.send_leader_multicast_announcement()
+            old_game_state = self.game_state
+            self.send_primary_server_update_client(old_game_state)
+            self.game_state = GameStateManager()
 
-    def send_election_messages_test(self, higher_id_servers):
-        """Send election messages to servers with higher IDs."""
-        for server in higher_id_servers:
-            print(f"Sending election message to Server ID={server.id}, IP={server.ip}, Port={server.port}")
-            # Implement the actual message sending logic here
+            threading.Thread(target=self.send_multicast_message, daemon=True).start()
+            threading.Thread(target=self.sync_loop, daemon=True).start()
+            time.sleep(60)
+            threading.Thread(target=self.start_game, daemon=True).start()
+            self.heartbeat_failed_flag = False
+        else:
+            print(f"Server {self.server_id} is already the primary leader.")
 
-    def send_heartbeat_test(self):
-        """Send heartbeat messages to other servers to confirm leadership."""
-        if self.is_primary:
-            for server in self.connected_servers:
-                print(f"Primary Server {self.server_id} sent heartbeat to Server ID={server.id}, IP={server.ip}, Port={server.port}")
-                # Implement the actual heartbeat message sending logic here
+    def send_primary_server_update_client(self, game_state):
+        print("Sending primary server update message to client.")
+        connected_clients = game_state.connected_clients
+        for client in connected_clients:
+            print("Sending primary server update information to clients...")
+            message = {"message_type": "SERVER_FAILED", "score": client.client_score}
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.connect((client.ip, client.port))
+                    s.sendall(json.dumps(message).encode('utf-8'))
+            except Exception as e:
+                print(f"Failed to send message to client: {e}")
 
-    # def leader_election(self, server_id):
-    #     """
-    #     hithesh your work
-        
-    #     """
-    #     while self.server_running:
-    #         print("Connected Servers Information 123:")
-    #         for server in self.connected_servers:
-    #             print(f"Server ID: {server.id}, IP: {server.ip}, Port: {server.port}, "
-    #                   f"Is Primary: {server.is_primary}")
-    #         # if not self.connected_servers:
-    #         #     print("No servers are currently connected.")
-    #         # else:
+    def send_election_message(self, server):
+        """Send election message to a higher ID server."""
+        print(f"Sending election message to server {server.id}...")
+        message = {"message_type": "ELECTION", "candidate_id": self.server_id}
+        self.send_message(server, message)
 
-    #         time.sleep(30)  # Wait for 2 minutes before displaying again
-
-
-        # if self.heartbeat_failed_flag:
-        #     if server_id:
-        #         print(f"Leader election triggered due to failure of server {server_id}.")
-        #     else:
-        #         print("Starting normal leader election process.")
-        #     self.heartbeat_failed_flag = False  # Reset the flag after initiating the leader election
-
-        #     print("Starting normal leader election process.")
-
-    def handle_connection(self, conn, addr):
-        """Handle incoming unicast connection"""
-        print(f"Connection established with {addr}")
+    def send_message(self, server, message):
+        """Send a JSON message to another server over a socket connection."""
         try:
-            while self.server_running:
-                data = conn.recv(1024)
-                if not data:
-                    break  # Client disconnected
-
-                message = json.loads(data.decode())
-                message_type = message.get("message_type")
-
-                if message_type == "BACKUP_CONNECTION_TO_BACKUP":
-                    print(f"Backup to Backup connection received from {addr}: {data.decode()}")
-                    new_server = ServerDetail(
-                        ip=message["ip"],
-                        port=message["port"],
-                        server_id=message["server_id"],
-                        is_primary=False
-                    )
-                    self.connected_servers.append(new_server)
-                    print(f"Added server: {new_server.ip}:{new_server.port}")
-                    response = json.dumps({
-                        "message_type": "NEW_BACKUP_ADDITION",
-                        "server_id": self.server_id,
-                    })
-                    conn.sendall(response.encode())
-                    
-                elif message_type == "HEARTBEAT":
-                    print(f"Heartbeat received from {addr}: {message}")
-                    self.last_heartbeat[message["server_id"]] = datetime.datetime.now()
-
-                elif message_type == "PRIMARY_CONNECTION_TO_BACKUP":
-                    print(f"Primary to Backup connection received from {addr}: {data.decode()}")
-                    new_server = ServerDetail(
-                        ip=message["ip"],
-                        port=message["port"],
-                        server_id=message["server_id"],
-                        is_primary=True
-                    )
-                    self.connected_servers.append(new_server)
-                    print(f"Added server: {new_server.ip}:{new_server.port}")
-                    self.server_id = message["new_server_id"]
-                    self.is_acknowledged_by_primary_server = True
-                    conn.sendall(b"Received server id and added primary server details.")
-
-                elif message_type == "CLIENT_CONNECTION_TO_SERVER":
-                    print(f"Client to Primary connection received from {addr}: {data.decode()}")
-                    new_client = ClientDetail(
-                        ip=message["client_ip"],
-                        port=message["client_port"]
-                    )
-                    self.connected_clients.append(new_client)
-                    print(f"Added client: {new_client.ip}:{new_client.port}")
-                    conn.sendall(b"Received and saved client details.")
-                
-                elif message_type == "GAME_STATE_UPDATE":
-                    print(f"Game state update received from {addr}: {message}")
-                    game_state = json.loads(message["game_state"])
-                    self.update_game_state(game_state)
-                    print("Game state updated on backup server.")
-
-
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5)  # Set a timeout for receiving data
+                s.connect((server.ip, server.port))
+                s.sendall(json.dumps(message).encode('utf-8'))
+                print(f"Sent message to server {server.id}: {message}")
+                try:
+                    response = s.recv(1024).decode('utf-8')
+                    if response:
+                        print(f"Received response from server {server.id}: {response}")
+                        self.received_higher_id_response = True
+                except socket.timeout:
+                    print(f"No response received from server {server.id}, continuing...")
         except Exception as e:
-            print(f"Error with connection {addr}: {e}")
+            print(f"Failed to send message to server {server.id}: {e}")
+
+    def send_leader_multicast_announcement(self):
+        """Send a multicast message to announce the new primary leader."""
+        sock = create_multicast_sender_socket()
+        announcement_message = json.dumps({
+            "message_type": "PRIMARY_LEADER_ANNOUNCEMENT",
+            "new_leader_id": self.server_id,
+            "ip": self.server_ip,
+            "port": self.server_port
+        })
+        try:
+            print(f"Sending multicast announcement: {announcement_message}")
+            sock.sendto(announcement_message.encode(), (self.multicast_group, self.multicast_port))
+        except Exception as e:
+            print(f"Error sending multicast announcement: {e}")
         finally:
-            print(f"Closing connection with {addr}")
-            conn.close()
+            sock.close()
 
     def send_multicast_message(self, multicast_group='224.3.29.71', port=10000, message='Default Multicast message'):
         """
@@ -570,7 +469,6 @@ class Server:
             message (str): The multicast message to be sent
         """
         sock = create_multicast_sender_socket()
-        print(f'Starting multicast server on group {multicast_group}:{port}')
 
         server_data = {"ip": self.server_ip, "port": self.server_port, "server_type": "Primary"}
         server_data_message = json.dumps(server_data)
@@ -585,12 +483,12 @@ class Server:
             sock.close()
 
     def send_multicast_for_backup(self):
-        """Backup server sends multicast messages for 5 minutes"""
+        """Backup server sends multicast messages for 1 minute"""
         sock = create_multicast_sender_socket()
         start_time = time.time()
 
         try:
-            while self.server_running and (time.time() - start_time < 300):
+            while self.server_running and (time.time() - start_time < 60):
                 try:
                     is_acknowledged_by_primary_server = "N"
                     if self.server_id is not None:
@@ -601,11 +499,9 @@ class Server:
                                    "id": self.server_id}
                     server_data_message = json.dumps(server_data)
 
-                    print("Sending multicast message...")
                     sock.sendto(server_data_message.encode(), (self.multicast_group, self.multicast_port))
                     print(f"Backup server sent multicast message: {server_data_message}")
-                    print("Sleeping for 30 seconds...")
-                    time.sleep(30)
+                    time.sleep(10)
                 except Exception as e:
                     print(f"Error in multicast send loop: {e}")
                     break
@@ -620,7 +516,6 @@ class Server:
         Listen to multicast messages and establish unicast connection with backup servers
         """
         sock = create_multicast_receiver_socket(self.multicast_group, self.multicast_port)
-        print(f"Listening for multicast messages on {self.multicast_group}:{self.multicast_port}")
         while self.server_running:
             try:
                 data, addr = sock.recvfrom(1024)
@@ -631,10 +526,34 @@ class Server:
                 if server_ip != self.server_ip and server_port != self.server_port:
                     print(f"Received multicast message from {addr}: {message}")
 
+                    if message.get("message_type") == "PRIMARY_LEADER_ANNOUNCEMENT":
+                        print(f"Primary leader announcement received from {addr}: {message}")
+                        new_leader = ServerDetail(
+                            ip=message["ip"],
+                            port=message["port"],
+                            server_id=message["new_leader_id"],
+                            is_primary=True
+                        )
+                        # Check if the leader is already in the list
+                        if not any(server.id == new_leader.id for server in self.connected_servers):
+                            self.connected_servers.append(new_leader)
+                            print(f"Added new primary leader: {new_leader.ip}:{new_leader.port}")
+                        else:
+                            for server in self.connected_servers:
+                                if server.id == new_leader.id:
+                                    server.set_is_primary(True)
+                            print(f"Leader {new_leader.id} is already recognized.")
+
+                        # Stop the election process if this server was running one
+                        self.received_higher_id_response = True
+                        self.heartbeat_failed_flag = False
+                        # refresh its game state
+                        self.game_state = GameStateManager()
+
                     # in case of a primary server - the primary server sends its own ip, port, server_id, message_type and new id of backup server
                     # it also saves the server details
                     # The backup server then on receiving the unicast message PRIMARY_CONNECTION_TO_BACKUP saves the details of primary server and also updates its own id
-                    if message.get("server_type") == "Backup":
+                    elif message.get("server_type") == "Backup":
                         if self.is_primary_server and message.get(
                                 "is_acknowledged_by_primary_server") == "N" and not self.is_server_in_connected_list(
                             server_ip, server_port):
@@ -675,7 +594,6 @@ class Server:
                 break
         sock.close()
 
-    # Dual connection is to be established
     def connect_to_backup_server(self, backup_server_ip, backup_server_port, response):
         """
         Establish unicast connection with a backup server.
@@ -721,20 +639,25 @@ class Server:
         """Start the game if we have more than 1 client connected."""
         try:
             while self.server_running:
-                print("Check")
                 if len(self.connected_clients) > 1:
                     print("Starting the game...")
                     game = Game()
-                    game.choose_word()
-                    print(f"Word of the game is: {self.current_word}")
+                    self.current_game_word = game.choose_word()
                     self.game_started = True  # Set the game started flag
                     self.enable_all_connected_clients_to_play()
+                    self.game_round += 1
                     while self.game_round <= self.max_rounds:
                         print(f"Round {self.game_round} begins.")
                         self.play_round(game)
                         self.enable_all_connected_clients_to_play()
                         if self.game_ended:
                             print("Correct Word has been guessed!")
+                            print("Game Over...")
+                            self.notify_end_result(game)
+                            self.end_game()
+                            break
+                        elif self.game_stopped:
+                            print("Game ending due to unforseen reasons!")
                             print("Game Over...")
                             self.notify_end_result(game)
                             self.end_game()
@@ -756,6 +679,8 @@ class Server:
                 self.ask_client_to_guess(client, game)
                 if(self.game_ended):
                     break
+                if(self.game_stopped):
+                    break
 
     def ask_client_to_guess(self, client, game):
         """
@@ -764,18 +689,19 @@ class Server:
         """
         print(f"Client {client.ip} making a guess.")
         guessed_word = self.receive_client_guess(client)
-        client.set_last_played_word(guessed_word)
-        result = game.get_game_result(guessed_word, client.client_score)
+        if guessed_word is not None:
+            client.set_last_played_word(guessed_word)
+            result = game.get_game_result(guessed_word, client.client_score)
 
-        if result["result_output"] == "CORRECT_GUESS":
-            print("Client guessed the correct word!")
-            self.game_ended = True
-            client.set_has_guessed_word(True)
-        else:
-            print("Client guessed an incorrect word!")
-            client.set_client_score(result["updated_score"])
-            client.set_last_word_interpretation(result["last_word_interpretation"])
-            self.notify_guess_result(client)
+            if result["result_output"] == "CORRECT_GUESS":
+                print("Client guessed the correct word!")
+                self.game_ended = True
+                client.set_has_guessed_word(True)
+            else:
+                print("Client guessed an incorrect word!")
+                client.set_client_score(result["updated_score"])
+                client.set_last_word_interpretation(result["last_word_interpretation"])
+                self.notify_guess_result(client)
 
     def receive_client_guess(self, client):
         """
@@ -793,7 +719,7 @@ class Server:
                 print(f"Requested client {client.ip}:{client.port} to guess the word.")
 
                 # Wait for the client to send their guess
-                # sock.settimeout(10)  # Setting a timeout to avoid indefinite blocking
+                #sock.settimeout(20)
                 # the response will contain the guessed word and message id ( for now the timestamp will act as the message id)
                 data = sock.recv(1024)
                 print(f"Recieved {data}")
@@ -808,6 +734,18 @@ class Server:
                 return guessed_word
         except ConnectionRefusedError:
             print(f"Error sending message to client at {client.ip}:{client.port}: Connection refused")
+        except socket.timeout:
+            print(f"Timeout occurred while waiting for client at {client.ip}:{client.port} to guess the word")
+            self.connected_clients = [connected_client for connected_client in self.connected_clients if
+                                      not (connected_client.ip == client.ip and connected_client.port == client.port)]
+            if len(self.connected_clients) == 1:
+                self.game_stopped = True
+        except Exception as e:
+            print(f"Unexpected error while waiting for client at {client.ip}:{client.port} to guess the word")
+            self.connected_clients = [connected_client for connected_client in self.connected_clients if
+                                      not (connected_client.ip == client.ip and connected_client.port == client.port)]
+            if len(self.connected_clients) == 1:
+                self.game_stopped = True
 
     def notify_guess_result(self, client):
         """Notify a single client of their score and guesses."""
@@ -906,7 +844,6 @@ class Server:
         if self.server_socket:
             self.server_socket.close()
         print("Server stopped.")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Start a server (primary or backup).")

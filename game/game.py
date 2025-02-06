@@ -8,9 +8,9 @@ class Game:
     def choose_word(self):
         self.current_word = game.word.choose_random_word()
         print(f"Word of the game is: {self.current_word}")
+        return self.current_word
 
     def get_game_result(self, guessed_word, player_current_score):
-        print("Get Result for the word played.")
         print(f"Current Score of Player: {player_current_score}")
         if self.current_word == guessed_word:
             print("Correct word guessed by player!")
@@ -35,7 +35,7 @@ class Game:
                 word_interpretation += "*"
             i += 1
         if not any_correct_guess:
-            word_interpretation = None
+            word_interpretation = "*****"
         print(f"Word interpretation is {word_interpretation}")
         print(f"Updated score of player is  {player_current_score}")
         result["result_output"] = "INCORRECT_GUESS"
