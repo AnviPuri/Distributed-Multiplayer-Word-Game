@@ -43,7 +43,7 @@ def create_multicast_receiver_socket(multicast_group, port):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     elif sys.platform == "darwin":  # macOS
-        
+
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)  # Only for macOS
     else:
@@ -557,7 +557,9 @@ class Server:
                         port=message["client_port"]
                     )
                     if not self.is_client_in_connected_list(new_client.ip, new_client.port):
+
                         self.connected_clients.append(new_client)
+
                         print(f"Added client: {new_client.ip}:{new_client.port}")
                     else:
                         print(f"Client {new_client.ip}:{new_client.port} already exists in the connected clients list.")
@@ -762,6 +764,7 @@ class Server:
             if client.ip == new_client_ip and client.port == new_client_port:
                 return True
         return False
+    
     def start_game(self):
         """Start the game if we have more than 1 client connected."""
         try:
