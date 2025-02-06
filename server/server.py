@@ -135,7 +135,6 @@ class Server:
             while self.server_running:
                 try:
                     conn, addr = self.server_socket.accept()
-                    print(f"Establishing Connection...")
                     client_thread = threading.Thread(target=self.handle_connection, args=(conn, addr))
                     client_thread.daemon = True
                     client_thread.start()
@@ -150,7 +149,6 @@ class Server:
 
     def handle_connection(self, conn, addr):
         """Handle incoming unicast connection"""
-        print(f"Connection established with {addr}")
         try:
             while self.server_running:
                 data = conn.recv(1024)
@@ -161,7 +159,7 @@ class Server:
                 message_type = message.get("message_type")
 
                 if message_type == "BACKUP_CONNECTION_TO_BACKUP":
-                    print(f"Backup to Backup connection received from {addr}: {data.decode()}")
+                    print(f"Backup to Backup connection received : {data.decode()}")
                     new_server = ServerDetail(
                         ip=message["ip"],
                         port=message["port"],
@@ -215,7 +213,6 @@ class Server:
         except Exception as e:
             print(f"Error with connection {addr}: {e}")
         finally:
-            print(f"Closing connection with {addr}")
             conn.close()
 
     def get_game_state_snapshot(self):
@@ -524,10 +521,10 @@ class Server:
                 server_port = message.get("port")
 
                 if server_ip != self.server_ip and server_port != self.server_port:
-                    print(f"Received multicast message from {addr}: {message}")
+                    print(f"Received multicast message: {message}")
 
                     if message.get("message_type") == "PRIMARY_LEADER_ANNOUNCEMENT":
-                        print(f"Primary leader announcement received from {addr}: {message}")
+                        print(f"Primary leader announcement received: {message}")
                         new_leader = ServerDetail(
                             ip=message["ip"],
                             port=message["port"],
@@ -610,7 +607,6 @@ class Server:
                     if data:
                         message = json.loads(data.decode())
                         if message.get("message_type") == "NEW_BACKUP_ADDITION":
-                            print(f"Adding new bakcup server using: {message}")
                             new_server = ServerDetail(
                                 ip=backup_server_ip,
                                 port=backup_server_port,
@@ -668,7 +664,7 @@ class Server:
                     self.end_game()
                 else:
                     print("Not enough clients to start the game.")
-                time.sleep(60)  # Wait for 60 seconds before checking whether game can be started.
+                time.sleep(30)  # Wait for 60 seconds before checking whether game can be started.
         except KeyboardInterrupt:
             print('Multicast server stopped.')
 
@@ -718,11 +714,8 @@ class Server:
                 sock.sendall(client_guess_message.encode())
                 print(f"Requested client {client.ip}:{client.port} to guess the word.")
 
-                # Wait for the client to send their guess
-                #sock.settimeout(20)
-                # the response will contain the guessed word and message id ( for now the timestamp will act as the message id)
+                sock.settimeout(30)
                 data = sock.recv(1024)
-                print(f"Recieved {data}")
 
                 message = json.loads(data.decode())
                 server_ip = message.get("ip")
@@ -800,7 +793,6 @@ class Server:
         if self.game_ended:
             for client in self.connected_clients:
                 if client.has_guessed_word:
-                    # later replace ip and port with player username
                     winner_details["ip"] = client.ip
                     winner_details["port"] = client.port
                     break
@@ -859,5 +851,4 @@ if __name__ == "__main__":
         server.start()
     except KeyboardInterrupt:
         print("Shutting down server...")
-        # trigger this externally?
         server.stop()
