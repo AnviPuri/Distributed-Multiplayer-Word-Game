@@ -697,13 +697,18 @@ class Server:
 
     def play_round(self, game):
         """Each client guesses the word in FIFO order."""
+        guess_queue = deque()
         for client in self.connected_clients:
             if client.can_play_the_round:
-                self.ask_client_to_guess(client, game)
-                if(self.game_ended):
-                    break
-                if(self.game_stopped):
-                    break
+                guessed_word = self.ask_client_to_guess(client, game)
+                if guessed_word is not None:
+                    guess_queue.append((client, guessed_word))
+
+        while guess_queue:
+            client, guessed_word = guess_queue.popleft()
+            self.process_guess(client, guessed_word, game)
+            if self.game_ended or self.game_stopped:
+                break
 
     def ask_client_to_guess(self, client, game):
         """
@@ -712,19 +717,21 @@ class Server:
         """
         print(f"Client {client.ip} making a guess.")
         guessed_word = self.receive_client_guess(client)
-        if guessed_word is not None:
-            client.set_last_played_word(guessed_word)
-            result = game.get_game_result(guessed_word, client.client_score)
+        return guessed_word
 
-            if result["result_output"] == "CORRECT_GUESS":
-                print("Client guessed the correct word!")
-                self.game_ended = True
-                client.set_has_guessed_word(True)
-            else:
-                print("Client guessed an incorrect word!")
-                client.set_client_score(result["updated_score"])
-                client.set_last_word_interpretation(result["last_word_interpretation"])
-                self.notify_guess_result(client)
+    def process_guess(self, client, guessed_word, game):
+
+        client.set_last_played_word(guessed_word)
+        result = game.get_game_result(guessed_word, client.client_score)
+        if result["result_output"] == "CORRECT_GUESS":
+            print("Client guessed the correct word!")
+            self.game_ended = True
+            client.set_has_guessed_word(True)
+        else:
+            print("Client guessed an incorrect word!")
+            client.set_client_score(result["updated_score"])
+            client.set_last_word_interpretation(result["last_word_interpretation"])
+            self.notify_guess_result(client)
 
     def receive_client_guess(self, client):
         """
