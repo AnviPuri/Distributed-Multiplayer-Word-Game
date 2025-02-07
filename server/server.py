@@ -252,7 +252,6 @@ class Server:
             "game_state": game_state_snapshot
         }
         message_json = json.dumps(message)
-        print(message_json)
 
         for server in self.connected_servers:
             if not server.is_primary:  # Send only to backup servers
