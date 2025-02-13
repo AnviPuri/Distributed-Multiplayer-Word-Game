@@ -114,7 +114,7 @@ class Server:
             else:
                 threading.Thread(target=self.send_multicast_for_backup, daemon=True).start()
 
-            time.sleep(15)
+            time.sleep(10)
 
             if self.is_primary_server:
                 print("Starting Game")
@@ -692,7 +692,7 @@ class Server:
                     self.end_game()
                 else:
                     print("Not enough clients to start the game.")
-                time.sleep(30)  # Wait for 60 seconds before checking whether game can be started.
+                time.sleep(10)  # Wait for 10 seconds before checking whether game can be started.
         except KeyboardInterrupt:
             print('Multicast server stopped.')
 
@@ -853,7 +853,7 @@ class Server:
         self.reset_game_state()
         self.game_started = False  # Reset the game started flag
         print("Game will start again after a minute...")
-        time.sleep(60)
+        time.sleep(30)
         self.start_game()
 
     def reset_game_state(self):
@@ -862,7 +862,6 @@ class Server:
         self.game_ended = False
         self.game_started = False  # Reset the game started flag
         self.reset_all_connected_clients_state()
-        # self.clients = deque(self.connected_clients)  # How to implement FIFO order
 
     def stop(self):
         """Stop the server and cleanup resources"""
